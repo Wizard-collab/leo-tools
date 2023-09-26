@@ -2,6 +2,7 @@
 # Author: Leo BRUNEL
 # Contact: contact@leobrunel.com
 
+import os
 import pymel.core as pm
 import maya.cmds as cmds
 
@@ -47,6 +48,11 @@ def picker():
     from mgear import anim_picker
     anim_picker.load()
 
+def get_icon_path(icon_name):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(script_dir, "icons", icon_name)
+    return icon_path
+
 def create_shelf(shelf_name, button_functions):
     try:
         pm.deleteUI(shelf_name, layout=True)
@@ -59,14 +65,15 @@ def create_shelf(shelf_name, button_functions):
         button_function = button[0]
         button_icon = button[1]
         button_name = button_function.__name__
-        pm.shelfButton(annotation=button_name, imageOverlayLabel=button_name, image=button_icon, command=pm.Callback(button_function))
+        pm.shelfButton(annotation=button_name, image=button_icon, command=pm.Callback(button_function))#, imageOverlayLabel=button_name)
 
 def create_leo_shelf():
-    create_shelf('Leo', [(tween, 'pythonFamily.png'),
-                        (cloth, 'pythonFamily.png'),
-                        (clean, 'pythonFamily.png'),
-                        (anim_view, 'pythonFamily.png'),
-                        (work_view, 'pythonFamily.png'),
-                        (create_nulls, 'pythonFamily.png'),
-                        (create_matrix_constraint, 'pythonFamily.png'),
-                        (picker, 'pythonFamily.png')])
+    add_icon_path()
+    create_shelf('Leo', [(tween, get_icon_path('regle-horizontale.png')),
+                        (cloth, get_icon_path('arts-martiaux-uniformes.png')),
+                        (clean, get_icon_path('la-main-scintille.png')),
+                        (anim_view, get_icon_path('les-yeux-croises.png')),
+                        (work_view, get_icon_path('oeil.png')),
+                        (create_nulls, get_icon_path('transformer.png')),
+                        (create_matrix_constraint, get_icon_path('agrafe.png')),
+                        (picker, get_icon_path('le-curseur.png'))])
