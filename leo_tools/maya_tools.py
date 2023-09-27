@@ -68,7 +68,6 @@ def create_shelf(shelf_name, button_functions):
         pm.shelfButton(annotation=button_name, image=button_icon, command=pm.Callback(button_function))#, imageOverlayLabel=button_name)
 
 def create_leo_shelf():
-    add_icon_path()
     create_shelf('Leo', [(tween, get_icon_path('regle-horizontale.png')),
                         (cloth, get_icon_path('arts-martiaux-uniformes.png')),
                         (clean, get_icon_path('la-main-scintille.png')),
