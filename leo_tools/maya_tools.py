@@ -15,6 +15,11 @@ def cloth():
     win = easy_cloth.easy_cloth()
     win.showUI()
 
+def tags():
+    from leo_tools import wizardTags
+    ui = wizardTags.wizardTags_editor()
+    ui.show()
+
 def clean():
     from leo_tools import clean_obj
     clean_obj.export_delete_reimport_rename()
@@ -68,7 +73,6 @@ def create_shelf(shelf_name, button_functions):
         pm.shelfButton(annotation=button_name, image=button_icon, command=pm.Callback(button_function))#, imageOverlayLabel=button_name)
 
 def create_leo_shelf():
-    add_icon_path()
     create_shelf('Leo', [(tween, get_icon_path('regle-horizontale.png')),
                         (cloth, get_icon_path('arts-martiaux-uniformes.png')),
                         (clean, get_icon_path('la-main-scintille.png')),
@@ -76,4 +80,5 @@ def create_leo_shelf():
                         (work_view, get_icon_path('oeil.png')),
                         (create_nulls, get_icon_path('transformer.png')),
                         (create_matrix_constraint, get_icon_path('agrafe.png')),
-                        (picker, get_icon_path('le-curseur.png'))])
+                        (picker, get_icon_path('le-curseur.png')),
+                        (tags, get_icon_path('price-tag.png'))])
