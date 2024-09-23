@@ -144,7 +144,6 @@ def apply_nCloth_to_object(obj):
     logging.info(f"{obj.name()}_nCloth created")
     assign_mtl(obj, CLOTH_MTL_NAME, RGB=[0.3,0.3,0.5])
     assign_default_ncloth_parameters(ncloth_shape)
-
     assign_ec_nucleus_and_remove_created_one(ncloth_shape,
                                             before_creation_nucleus_list)
 
