@@ -13,7 +13,6 @@ class easy_cloth():
         self.clothWin = self.createUI()
         self.collideShader = 'colliderShader'
 
-
     def createUI(self, *arg):
         
         if cmds.window('easyClothWin', exists=1) == True:
@@ -94,8 +93,6 @@ class easy_cloth():
         nCacheButton = cmds.iconTextButton(l='nCache ( in scene directory ) HD', command=self.nCacheHD,i='nClothCacheCreate.png',style='iconAndTextHorizontal', bgc=(0.35,0.35,0.35),width = 200)
         cmds.text(l='', height=6)
         
-        
-        
         cmds.formLayout(mainForm, e=1, attachForm=[(nCacheColumn,'bottom',10),(nCacheColumn,'left',10),(nCacheColumn,'right',10),(bodyLayout,'top',10),(bodyLayout,'bottom',10),(bodyLayout,'left',10),(bodyLayout,'right',10)])
         return(clothWin)
         
@@ -114,7 +111,6 @@ class easy_cloth():
     def cComponent(self, *arg):
         mel.eval('createNConstraint pointToPoint 0;')
 
-
     def changeNucleus(self, item):
         if item == 'New solver':
             cmds.textFieldGrp(self.nucleusNameField, e=1, visible=1)
@@ -129,11 +125,9 @@ class easy_cloth():
             else:
                 cmds.checkBox(self.activeCheck, e=1, value=0, enable=1)
 
-        
     def activateNucleus(self, activate, *arg):
         nucleus = cmds.optionMenu(self.nucleusMenu, q=1, v=1)
         cmds.setAttr(nucleus+'.enable',activate)
-        
 
     def assignNucleusParam(self, nucleus='', *arg):
         
@@ -143,7 +137,6 @@ class easy_cloth():
         cmds.setAttr(nucleus+'.subSteps', 12)
         cmds.setAttr(nucleus+'.maxCollisionIterations', 24)
         cmds.setAttr(nucleus+'.spaceScale', 0.1)
-
 
     def startFrame(self, nucleus, *arg):
         if nucleus == False or nucleus:
@@ -349,11 +342,7 @@ class easy_cloth():
             cmds.setAttr(clothShape+'.drag',0.01)
             cmds.setAttr(clothShape+'.tangentialDrag',0.2)
 
-
     def createCollider (self, *arg):
-        
-        
-        
         objList = cmds.ls(sl=1)
         if objList == []:
             cmds.warning('Please select an object')
