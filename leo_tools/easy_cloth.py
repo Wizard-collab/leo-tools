@@ -232,7 +232,7 @@ def create_ncache_on_selection(HD=False):
     obj = get_selection()
     if not obj:
         return
-    sim_dir = get_sim_dir(obj).replace('\\', '/')
+    sim_dir = get_sim_dir(obj.split(':')[-1])
     if not sim_dir:
         return
     if HD==True:
@@ -256,7 +256,7 @@ def get_sim_dir(obj):
     ncache_dir = get_ncache_dir()
     if not ncache_dir:
         return
-    obj_ncache_dir = os.path.join(ncache_dir, obj.getName())
+    obj_ncache_dir = os.path.join(ncache_dir, obj)
     if not os.path.isdir(obj_ncache_dir):
         os.makedirs(obj_ncache_dir)
 
@@ -266,7 +266,7 @@ def get_sim_dir(obj):
         version += 1
         version_dir = os.path.join(obj_ncache_dir, str(version).zfill(4))
     os.makedirs(version_dir)
-    return version_dir
+    return version_dir.replace('\\', '/')
 
 def increment_folder(folder_name):
     num=1
@@ -323,7 +323,7 @@ def duplicate_hide_and_group(obj, grp_name, duplicata_suffix, parent, blend_shap
                                         duplicata,
                                         origin='world',
                                         name=f'{obj}_{BLEND_SHAPE_SUFFIX}')[0]
-        blendshape_node.setAttr(obj.name(), 1.0) 
+        blendshape_node.setAttr(obj.name().split(':')[-1], 1.0) 
     return duplicata, grp
 
 def list_scene_sim_grps():
