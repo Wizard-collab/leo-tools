@@ -13,7 +13,7 @@ def tween():
 def cloth():
     from leo_tools import easy_cloth
     win = easy_cloth.easy_cloth()
-    win.showUI()
+    win.show()
 
 def tags():
     from leo_tools import wizardTags
