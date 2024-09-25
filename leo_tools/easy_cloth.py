@@ -84,6 +84,7 @@ class easy_cloth(QtWidgets.QDialog):
             self.ncache_group.setEnabled(True)
             self.nucleus_name_label.setText(f'Nucleus : {self.current_sim}_{NUCLEUS__SUFFIX}')
             self.start_frame_spinBox.setValue(get_start_frame(self.current_sim))
+            self.space_scale_spinBox.setValue(get_space_scale(self.current_sim))
         else:
             self.nucleus_group.setEnabled(False)
             self.ncloth_group.setEnabled(False)
@@ -91,6 +92,7 @@ class easy_cloth(QtWidgets.QDialog):
             self.ncache_group.setEnabled(False)
             self.nucleus_name_label.setText(f'Nucleus : ...')
             self.start_frame_spinBox.setValue(0)
+            self.space_scale_spinBox.setValue(1)
 
     def create_sim_grp(self):
         self.create_sim_grp_widget = create_sim_grp_widget(self)
@@ -132,6 +134,14 @@ class easy_cloth(QtWidgets.QDialog):
         self.start_frame_spinBox.setRange(-1000000, 1000000)
         self.start_frame_layout.addWidget(QtWidgets.QLabel('Start frame'))
         self.start_frame_layout.addWidget(self.start_frame_spinBox)
+
+        self.space_scale_layout = QtWidgets.QHBoxLayout()
+        self.nucleus_layout.addLayout(self.space_scale_layout)
+        self.space_scale_spinBox = QtWidgets.QDoubleSpinBox()
+        self.space_scale_spinBox.setValue(0)
+        self.space_scale_spinBox.setRange(-1000000, 1000000)
+        self.space_scale_layout.addWidget(QtWidgets.QLabel('Space scale'))
+        self.space_scale_layout.addWidget(self.space_scale_spinBox)
 
         self.assign_default_nucleus_parameters_button = QtWidgets.QPushButton("Assign Guff parameters on nucleus")
         self.nucleus_layout.addWidget(self.assign_default_nucleus_parameters_button)
@@ -194,13 +204,20 @@ class easy_cloth(QtWidgets.QDialog):
         self.assign_default_cloth_parameters_button.clicked.connect(lambda:assign_default_ncloth_parameters())
         self.create_nrigid_button.clicked.connect(lambda:apply_nRigid_to_selected(sim_grp_name=self.current_sim, subdiv=int(self.subdiv_combobox.currentText())))
         self.assign_default_rigid_parameters_button.clicked.connect(lambda:assign_default_nrigid_parameters())
+        self.assign_default_nucleus_parameters_button.clicked.connect(self.assign_default_on_nucleus)
         self.start_frame_spinBox.valueChanged.connect(lambda:set_start_frame(sim_grp_name=self.current_sim, start_frame=self.start_frame_spinBox.value()))
+        self.space_scale_spinBox.valueChanged.connect(lambda:set_space_scale(sim_grp_name=self.current_sim, space_scale=self.space_scale_spinBox.value()))
         self.create_ncache_button.clicked.connect(lambda:create_ncache_on_selection())
         self.create_ncache_HD_button.clicked.connect(lambda:create_ncache_on_selection(HD=True))
         self.open_ncache_folder_button.clicked.connect(open_ncache_folder)
         self.create_new_sim_grp_button.clicked.connect(self.create_sim_grp)
         self.refresh_sim_grp_button.clicked.connect(self.refresh)
         self.sim_groups_combobox.currentTextChanged.connect(self.modify_sim_grp)
+
+    def assign_default_on_nucleus(self):
+        nucleus = create_or_get_nucleus(self.current_sim)
+        assign_default_nucleus_parameters(nucleus)
+        self.refresh()
 
 def open_ncache_folder():
     ncache_path = get_ncache_dir()
@@ -215,18 +232,26 @@ def create_or_get_nucleus(sim_grp_name):
         nucleus = pm.createNode('nucleus', name=nucleus_name)
         time_node = pm.PyNode('time1')
         time_node.outTime >> nucleus.currentTime
+        assign_default_nucleus_parameters(nucleus)
     nucleus = pm.PyNode(nucleus_name)
     pm.parent(nucleus, sim_grp)
-    assign_default_nucleus_parameters(nucleus)
     return nucleus
 
 def set_start_frame(start_frame, sim_grp_name):
     nucleus = create_or_get_nucleus(sim_grp_name)
     pm.setAttr(nucleus.startFrame, start_frame)
 
+def set_space_scale(space_scale, sim_grp_name):
+    nucleus = create_or_get_nucleus(sim_grp_name)
+    pm.setAttr(nucleus.spaceScale, space_scale)
+
 def get_start_frame(sim_grp_name):
     nucleus = create_or_get_nucleus(sim_grp_name)
     return pm.getAttr(nucleus.startFrame)
+
+def get_space_scale(sim_grp_name):
+    nucleus = create_or_get_nucleus(sim_grp_name)
+    return pm.getAttr(nucleus.spaceScale)
 
 def create_ncache_on_selection(HD=False):
     obj = get_selection()
