@@ -621,3 +621,7 @@ def assign_default_nrigid_parameters(nrigid_shape=None):
     pm.setAttr(nrigid_shape.displayColorB,0)
 
     logging.info(f"Default parameters assigned to {nrigid_shape}")
+
+if __name__ == "__main__":
+    win = easy_cloth()
+    win.show()

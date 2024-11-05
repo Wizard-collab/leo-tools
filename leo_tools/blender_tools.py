@@ -15,9 +15,21 @@ import bpy
 import wizard_communicate
 from blender_wizard import wizard_plugin
 
+def add_subdivision_surface_modifier():
+    selected_objects = bpy.context.selected_objects
+    for obj in selected_objects:
+        for modifier in obj.modifiers:
+            if modifier.type == 'SUBSURF':
+                return
+        subsurf_modifier = obj.modifiers.new(name="Subdivision", type='SUBSURF')
+        subsurf_modifier.render_levels = 2
+        subsurf_modifier.levels = 1
+
 def init_render_settings():
+    wizard_plugin.set_image_size()
     bpy.context.scene.render.engine = 'CYCLES'
     bpy.context.scene.render.film_transparent = True
+    '''
     bpy.context.scene.render.image_settings.file_format = 'OPEN_EXR_MULTILAYER'
     bpy.context.scene.render.image_settings.color_management = 'OVERRIDE'
     bpy.context.scene.view_layers["ViewLayer"].use_pass_mist = True
@@ -41,62 +53,49 @@ def init_render_settings():
     bpy.context.scene.render.motion_blur_shutter = 0.2
     bpy.context.scene.cycles.caustics_refractive = False
     bpy.context.scene.cycles.caustics_reflective = False
-    wizard_plugin.set_image_size()
-
-def set_LD():
-    bpy.context.scene.render.resolution_percentage = 50
-    bpy.context.scene.cycles.adaptive_threshold = 0.1
-    bpy.context.scene.render.threads_mode = 'AUTO'
-    job_name = f"{os.environ['WIZARD_CATEGORY_NAME']}_{os.environ['WIZARD_ASSET_NAME']}_{os.environ['WIZARD_STAGE_NAME']}_LD"
-
-def set_HD():
-    bpy.context.scene.render.resolution_percentage = 100
-    bpy.context.scene.cycles.adaptive_threshold = 0.01
-    bpy.context.scene.render.threads_mode = 'AUTO'
-    job_name = f"{os.environ['WIZARD_CATEGORY_NAME']}_{os.environ['WIZARD_ASSET_NAME']}_{os.environ['WIZARD_STAGE_NAME']}_HD"
+    '''
 
 def set_fixed_thread():
     bpy.context.scene.render.threads_mode = 'FIXED'
-    bpy.context.scene.render.threads = 10
+    bpy.context.scene.render.threads = 18
 
-def get_RND_dir(export_name):
-    RND_dir = wizard_communicate.request_render(int(os.environ['wizard_version_id']), export_name)
-    return RND_dir
+def set_thread_all():
+    bpy.context.scene.render.threads_mode = 'AUTO'
 
-class leo_render_settings(bpy.types.Operator):
-    bl_idname = "leo.leo_render_settings"
-    bl_label = "Leo render settings"
-    bl_description = "Apply leo render settings"
+class init_settings(bpy.types.Operator):
+    bl_idname = "leo.init_settings"
+    bl_label = "Init render settings"
+    bl_description = "Init render settings"
     
     def execute(self, context):
         init_render_settings()
         return {'FINISHED'}
 
-class leo_LD(bpy.types.Operator):
-    bl_idname = "leo.leo_ld"
-    bl_label = "Set LD render settings"
-    bl_description = "Set LD render settings"
-    
-    def execute(self, context):
-        set_LD()
-        return {'FINISHED'}
-
-class leo_HD(bpy.types.Operator):
-    bl_idname = "leo.leo_hd"
-    bl_label = "Set HD render settings"
-    bl_description = "Set HD render settings"
-    
-    def execute(self, context):
-        set_HD()
-        return {'FINISHED'}
-
 class threads(bpy.types.Operator):
     bl_idname = "leo.threads"
-    bl_label = "Set fixed threads to 10"
-    bl_description = "Set fixed threads to 10"
+    bl_label = "Set fixed threads to 18"
+    bl_description = "Set fixed threads to 18"
     
     def execute(self, context):
         set_fixed_thread()
+        return {'FINISHED'}
+
+class threads_all(bpy.types.Operator):
+    bl_idname = "leo.threads_all"
+    bl_label = "Set threads to all"
+    bl_description = "Set threads to all"
+    
+    def execute(self, context):
+        set_thread_all()
+        return {'FINISHED'}
+
+class add_subdiv(bpy.types.Operator):
+    bl_idname = "leo.add_subdiv"
+    bl_label = "Add subdiv on selection"
+    bl_description = "Add subdiv on selection"
+    
+    def execute(self, context):
+        add_subdivision_surface_modifier()
         return {'FINISHED'}
 
 class TOPBAR_MT_leo_menu(bpy.types.Menu):
@@ -104,19 +103,18 @@ class TOPBAR_MT_leo_menu(bpy.types.Menu):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("leo.leo_render_settings", icon_value=leo_icons["all"].icon_id)
-        layout.operator("leo.leo_ld", icon_value=leo_icons["all"].icon_id)
-        layout.operator("leo.leo_hd", icon_value=leo_icons["all"].icon_id)
+        layout.operator("leo.init_settings", icon_value=leo_icons["all"].icon_id)
         layout.operator("leo.threads", icon_value=leo_icons["all"].icon_id)
-        layout.operator("leo.submit_flamenco", icon_value=leo_icons["all"].icon_id)
+        layout.operator("leo.threads_all", icon_value=leo_icons["all"].icon_id)
+        layout.operator("leo.add_subdiv", icon_value=leo_icons["all"].icon_id)
 
     def menu_draw(self, context):
         self.layout.menu("TOPBAR_MT_leo_menu")
 
-classes = (leo_render_settings,
-            leo_LD,
-            leo_HD,
+classes = ( init_settings,
             threads,
+            threads_all,
+            add_subdiv,
             TOPBAR_MT_leo_menu)
 
 def register():
