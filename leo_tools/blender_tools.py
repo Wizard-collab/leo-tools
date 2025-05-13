@@ -17,8 +17,10 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.label(text="Rigging Tools")
         layout.operator("leo_tools.create_zero", text="Create zero on selection")
         layout.operator("leo_tools.align_objects", text="Align objects")
-        layout.operator("leo_tools.align_object_to_bone", text="Align object object to bone")
+        layout.operator("leo_tools.align_object_to_bone", text="Align object to bone")
+        layout.operator("leo_tools.align_bone_to_bone", text="Align bone to bone")
         layout.operator("leo_tools.reset_trsfrm", text="Reset transforms")
+        layout.operator("leo_tools.mirror_rig_drivers", text="Mirror rig drivers")
         layout.label(text="Shading Tools")
         layout.operator("leo_tools.remove_materials", text="Remove materials")
         layout.operator("leo_tools.create_checker", text="Create new checker material")
@@ -65,7 +67,16 @@ class align_obj_to_bone(bpy.types.Operator):
     bl_description = "Align an object to a bone in pose mode"
 
     def execute(self, context):
-        align_object_to_bone()
+        align_bn_to_bn()
+        return {'FINISHED'}
+
+class align_bone_to_bone(bpy.types.Operator):
+    bl_idname = "leo_tools.align_bone_to_bone"
+    bl_label = "Align a bone to a bone in pose mode"
+    bl_description = "Align a bone to a bone in pose mode"
+
+    def execute(self, context):
+        align_bn_to_bn()
         return {'FINISHED'}
 
 
@@ -121,6 +132,15 @@ class create_checker(bpy.types.Operator):
     
     def execute(self, context):
         create_checker_material()
+        return {'FINISHED'}
+
+class mirror_rig_drivers(bpy.types.Operator):
+    bl_idname = "leo_tools.mirror_rig_drivers"
+    bl_label = "Mirror the rig drivers"
+    bl_description = "Mirror the rig drivers"
+    
+    def execute(self, context):
+        copy_rig_drivers()
         return {'FINISHED'}
 
 def update_tween(self, context):
@@ -205,6 +225,40 @@ def align_object_to_bone():
             print("No bone is selected in the armature.")
     else:
         print("Please select an armature in Pose Mode and a bone.")
+
+def align_bn_to_bn():
+    if bpy.context.object and bpy.context.object.type == 'ARMATURE' and bpy.context.object.mode == 'POSE':
+        # Get the active armature and selected bone
+
+        armature = bpy.context.object
+        active_pose_bone = armature.pose.bones[armature.data.bones.active.name]
+        selected_bones = [bone for bone in armature.pose.bones if bone.bone.select]
+        selected_bones.remove(bpy.data.objects[armature.name].pose.bones[active_pose_bone.name])
+
+        if selected_bones:
+            # Get the first selected bone (if multiple are selected, it uses the first one)
+            selected_bone = selected_bones[0]
+
+            selected_bone.matrix = active_pose_bone.matrix
+            print(f"Bone '{selected_bone.name}' aligned to bone '{active_pose_bone.name}' in armature '{armature.name}'.")
+        else:
+            print("No bone is selected in the armature.")
+    else:
+        armature = bpy.context.object
+        active_bone = armature.data.bones[armature.data.bones.active.name]
+        selected_bones = [bone for bone in armature.data.bones if bone.select]
+        selected_bones.remove(bpy.data.objects[armature.name].data.bones[active_bone.name])
+
+        if selected_bones:
+            # Get the first selected bone (if multiple are selected, it uses the first one)
+            selected_bone = selected_bones[0]
+
+            selected_bone.head = active_bone.head
+            selected_bone.tail = active_bone.tail
+            selected_bone.roll = active_bone.roll
+            print(f"Bone '{selected_bone.name}' aligned to bone '{active_pose_bone.name}' in armature '{armature.name}'.")
+        else:
+            print("No bone is selected in the armature.")
 
 def create_checker_material():
     # Create a new material
@@ -318,10 +372,55 @@ def remove_shaders():
         if obj.type == 'MESH':
             obj.data.materials.clear()
 
+def copy_pose_drivers():
+    armature = bpy.context.object
+    for fcurve in (armature.animation_data.drivers):
+            if '_R' in fcurve.data_path:
+                continue
+            new_fcurve = armature.driver_add(fcurve.data_path.replace('_L', '_R'))
+            copy_fcurve_properties(fcurve, new_fcurve) 
+
+def copy_armature_data_drivers():
+    armature = bpy.context.object
+    armature_data = armature.data
+    bones_with_hide_drivers = []
+    if armature_data.animation_data and armature_data.animation_data.drivers:
+        for fcurve in armature_data.animation_data.drivers:
+            if '_R' in fcurve.data_path:
+                continue
+            new_fcurve = armature_data.driver_add(fcurve.data_path.replace('_L', '_R'))
+            copy_fcurve_properties(fcurve, new_fcurve)
+
+def copy_fcurve_properties(fcurve, new_fcurve):
+    
+    while new_fcurve.driver.variables:
+        new_fcurve.driver.variables.remove(new_fcurve.driver.variables[0])
+    
+    for var in fcurve.driver.variables:
+        print(var)
+    
+        new_var = new_fcurve.driver.variables.new()
+        new_var.name = var.name
+        new_var.type = var.type
+
+        for i, target in enumerate(var.targets):
+            new_var_target = new_var.targets[i]
+            new_var_target.id = target.id
+            new_var_target.data_path = target.data_path.replace('_L', '_R')
+            new_var_target.bone_target = target.bone_target.replace('_L', '_R')
+    
+    new_fcurve.driver.type = fcurve.driver.type
+    new_fcurve.driver.expression = fcurve.driver.expression
+    
+def copy_rig_drivers():                
+    copy_pose_drivers()
+    copy_armature_data_drivers()
+
 def register():
     bpy.utils.register_class(create_z)
     bpy.utils.register_class(align_objs)
     bpy.utils.register_class(align_obj_to_bone)
+    bpy.utils.register_class(align_bone_to_bone)
     bpy.utils.register_class(reset_trsfrm)
     bpy.utils.register_class(remove_materials)
     bpy.utils.register_class(init_settings)
@@ -329,6 +428,7 @@ def register():
     bpy.utils.register_class(threads_all)
     bpy.utils.register_class(create_checker)
     bpy.utils.register_class(add_subdiv)
+    bpy.utils.register_class(mirror_rig_drivers)
     bpy.utils.register_class(CustomToolboxPanel)
     bpy.types.Object.tween_machine_percentage = bpy.props.FloatProperty(
         name="Percentage",
