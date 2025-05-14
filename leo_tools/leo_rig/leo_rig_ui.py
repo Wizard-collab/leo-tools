@@ -1,6 +1,6 @@
 import bpy
 from leo_tools import blender_tools
-from leo_tools.rig import leo_rig
+from leo_tools.leo_rig import leo_rig
 import os
 import importlib
 importlib.reload(blender_tools)

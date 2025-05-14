@@ -75,6 +75,7 @@ def end():
 def select_armatures():
     deselect_all_objects()
     template_armature = bpy.data.objects["template"]
+    bpy.context.view_layer.objects.active = template_armature
     rig_armature = bpy.data.objects["rig"]
     template_armature.hide_viewport = False
     rig_armature.hide_viewport = False
@@ -97,11 +98,10 @@ def select_rig_armature():
     return rig_armature
 
 def deselect_all_objects():
-    bpy.ops.object.mode_set(mode="OBJECT")
     for obj in bpy.context.view_layer.objects:
         if not obj.hide_viewport:
             obj.select_set(False)
-
+    bpy.context.view_layer.update()
 
 def align_edit_bones(rig_bone, target):
     rig_bone.head = target.head
@@ -178,22 +178,35 @@ def place_ik_pole_vector_and_target():
 
 def symmetrize_rig_armature():
     rig_armature = select_rig_armature()
+    all_vis = rig_armature.data.collections_all["all"].is_visible
+    deform_bones = rig_armature.data.collections_all["deform_bones"].is_visible
+    control_bones = rig_armature.data.collections_all["control_bones"].is_visible
+
+    rig_armature.data.collections_all["all"].is_visible = True
+    rig_armature.data.collections_all["deform_bones"].is_visible = True
+    rig_armature.data.collections_all["control_bones"].is_visible = True
+
     for bone in rig_armature.data.edit_bones:
         bone.select = True
     
     # Force update of selection
+    rig_armature.update_tag()
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.context.view_layer.update()
     
     bpy.ops.armature.symmetrize(direction='POSITIVE_X')
-    
+    rig_armature.update_tag()
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.context.view_layer.update()
     
     copy_pose_drivers()
     copy_armature_data_drivers()
+
+    rig_armature.data.collections_all["all"].is_visible = all_vis
+    rig_armature.data.collections_all["deform_bones"].is_visible = deform_bones
+    rig_armature.data.collections_all["control_bones"].is_visible = control_bones
 
 def copy_pose_drivers():
     rig_armature = select_rig_armature()
