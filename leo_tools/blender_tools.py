@@ -1,7 +1,7 @@
 import bpy
-from leo_tools import blender_tools
 import importlib
-importlib.reload(blender_tools)
+from leo_tools import texturing_tools
+texturing_tools.register()
 
 
 class CustomToolboxPanel(bpy.types.Panel):
@@ -16,15 +16,10 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout = self.layout
         obj = context.object
         # Add some buttons/operators to the panel
+        layout.label(text="Texturing")
+        layout.operator("leo_tools.create_udim_mask",
+                        text="Create mask with UDIMS")
         layout.label(text="Rigging Tools")
-        layout.operator("leo_tools.create_zero",
-                        text="Create zero on selection")
-        layout.operator("leo_tools.align_objects", text="Align objects")
-        layout.operator("leo_tools.align_object_to_bone",
-                        text="Align object to bone")
-        layout.operator("leo_tools.align_bone_to_bone",
-                        text="Align bone to bone")
-        layout.operator("leo_tools.reset_trsfrm", text="Reset transforms")
         layout.operator("leo_tools.mirror_rig_drivers",
                         text="Mirror rig drivers")
         layout.label(text="Shading Tools")
@@ -44,10 +39,22 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.label(text="Tween")
         if obj:
             layout.label(text=f"Selected Object: {obj.name}")
-            layout.prop(context.scene, "tween_machine_percentage", text="Percentage")
+            layout.prop(context.scene, "tween_machine_percentage",
+                        text="Percentage")
         else:
             layout.label(text="No object selected")
-            layout.prop(context.scene, "tween_machine_percentage", text="Percentage")
+            layout.prop(context.scene, "tween_machine_percentage",
+                        text="Percentage")
+
+
+class create_udim_mask(bpy.types.Operator):
+    bl_idname = "leo_tools.create_udim_mask"
+    bl_label = "Create mask with UDIMS"
+    bl_description = "Create mask with UDIMS"
+
+    def execute(self, context):
+        bpy.ops.object.create_udim_map('INVOKE_DEFAULT')
+        return {'FINISHED'}
 
 
 class add_subdiv(bpy.types.Operator):
@@ -67,56 +74,6 @@ class clean_shapes_names(bpy.types.Operator):
 
     def execute(self, context):
         clean_object_shapes_names()
-        return {'FINISHED'}
-
-
-class create_z(bpy.types.Operator):
-    bl_idname = "leo_tools.create_zero"
-    bl_label = "Create a zero object on selection"
-    bl_description = "Create a zero object on selection"
-
-    def execute(self, context):
-        create_zero()
-        return {'FINISHED'}
-
-
-class align_objs(bpy.types.Operator):
-    bl_idname = "leo_tools.align_objects"
-    bl_label = "Align two objects"
-    bl_description = "Align two objects"
-
-    def execute(self, context):
-        align_objects()
-        return {'FINISHED'}
-
-
-class align_obj_to_bone(bpy.types.Operator):
-    bl_idname = "leo_tools.align_object_to_bone"
-    bl_label = "Align an object to a bone in pose mode"
-    bl_description = "Align an object to a bone in pose mode"
-
-    def execute(self, context):
-        align_bn_to_bn()
-        return {'FINISHED'}
-
-
-class align_bone_to_bone(bpy.types.Operator):
-    bl_idname = "leo_tools.align_bone_to_bone"
-    bl_label = "Align a bone to a bone in pose mode"
-    bl_description = "Align a bone to a bone in pose mode"
-
-    def execute(self, context):
-        align_bn_to_bn()
-        return {'FINISHED'}
-
-
-class reset_trsfrm(bpy.types.Operator):
-    bl_idname = "leo_tools.reset_trsfrm"
-    bl_label = "Reset transforms of selected objects"
-    bl_description = "Reset transforms of selected objects"
-
-    def execute(self, context):
-        reset_transforms()
         return {'FINISHED'}
 
 
@@ -184,41 +141,45 @@ def update_tween(self, context):
     current_frame = context.scene.frame_current
     # Get the percentage from the scene property
     factor = context.scene.tween_machine_percentage / 100.0
-    
+
     # Handle armature in pose mode - work with selected bones
-    if (context.object and context.object.type == 'ARMATURE' and 
-        context.object.mode == 'POSE'):
-        
+    if (context.object and context.object.type == 'ARMATURE' and
+            context.object.mode == 'POSE'):
+
         armature = context.object
         if not armature.animation_data or not armature.animation_data.action:
             return
-            
+
         action = armature.animation_data.action
-        selected_bones = [bone for bone in armature.pose.bones if bone.bone.select]
-        
+        selected_bones = [
+            bone for bone in armature.pose.bones if bone.bone.select]
+
         for bone in selected_bones:
             bone_name = bone.name
             # Process location, rotation, and scale channels for each bone
             for data_path_base in ["location", "rotation_euler", "rotation_quaternion", "scale"]:
                 data_path = f'pose.bones["{bone_name}"].{data_path_base}'
-                
+
                 # Find fcurves for this bone's property
-                bone_fcurves = [fc for fc in action.fcurves if fc.data_path == data_path]
+                bone_fcurves = [
+                    fc for fc in action.fcurves if fc.data_path == data_path]
                 if not bone_fcurves:
                     continue
-                    
-                previous_frame, next_frame = find_keyframe_range(bone_fcurves, current_frame)
+
+                previous_frame, next_frame = find_keyframe_range(
+                    bone_fcurves, current_frame)
                 if previous_frame is None or next_frame is None:
                     continue
-                    
+
                 # Interpolate values for each component (x, y, z or w for quaternion)
                 interpolated_values = []
                 for fcurve in bone_fcurves:
                     prev_value = fcurve.evaluate(previous_frame)
                     next_value = fcurve.evaluate(next_frame)
-                    interpolated_value = (1 - factor) * prev_value + factor * next_value
+                    interpolated_value = (1 - factor) * \
+                        prev_value + factor * next_value
                     interpolated_values.append(interpolated_value)
-                
+
                 # Apply interpolated values to bone
                 if data_path_base == "location" and len(interpolated_values) >= 3:
                     bone.location = interpolated_values[:3]
@@ -228,41 +189,45 @@ def update_tween(self, context):
                     bone.rotation_quaternion = interpolated_values[:4]
                 elif data_path_base == "scale" and len(interpolated_values) >= 3:
                     bone.scale = interpolated_values[:3]
-                
+
                 # Auto keyframe if enabled
                 if context.scene.tool_settings.use_keyframe_insert_auto:
-                    bone.keyframe_insert(data_path=data_path_base, frame=current_frame)
-    
+                    bone.keyframe_insert(
+                        data_path=data_path_base, frame=current_frame)
+
     # Handle regular objects - work with all selected objects
     else:
         selected_objects = context.selected_objects
         if not selected_objects:
             selected_objects = [context.object] if context.object else []
-            
+
         for obj in selected_objects:
             if not obj or not obj.animation_data or not obj.animation_data.action:
                 continue
-                
+
             action = obj.animation_data.action
-            
+
             # Process location, rotation, and scale for each object
             for data_path in ["location", "rotation_euler", "rotation_quaternion", "scale"]:
-                obj_fcurves = [fc for fc in action.fcurves if fc.data_path == data_path]
+                obj_fcurves = [
+                    fc for fc in action.fcurves if fc.data_path == data_path]
                 if not obj_fcurves:
                     continue
-                    
-                previous_frame, next_frame = find_keyframe_range(obj_fcurves, current_frame)
+
+                previous_frame, next_frame = find_keyframe_range(
+                    obj_fcurves, current_frame)
                 if previous_frame is None or next_frame is None:
                     continue
-                    
+
                 # Interpolate values for each component
                 interpolated_values = []
                 for fcurve in obj_fcurves:
                     prev_value = fcurve.evaluate(previous_frame)
                     next_value = fcurve.evaluate(next_frame)
-                    interpolated_value = (1 - factor) * prev_value + factor * next_value
+                    interpolated_value = (1 - factor) * \
+                        prev_value + factor * next_value
                     interpolated_values.append(interpolated_value)
-                
+
                 # Apply interpolated values to object
                 if data_path == "location" and len(interpolated_values) >= 3:
                     obj.location = interpolated_values[:3]
@@ -272,17 +237,18 @@ def update_tween(self, context):
                     obj.rotation_quaternion = interpolated_values[:4]
                 elif data_path == "scale" and len(interpolated_values) >= 3:
                     obj.scale = interpolated_values[:3]
-                
+
                 # Auto keyframe if enabled
                 if context.scene.tool_settings.use_keyframe_insert_auto:
-                    obj.keyframe_insert(data_path=data_path, frame=current_frame)
+                    obj.keyframe_insert(data_path=data_path,
+                                        frame=current_frame)
 
 
 def find_keyframe_range(fcurves, current_frame):
     """Helper function to find previous and next keyframes"""
     previous_frame = None
     next_frame = None
-    
+
     for fcurve in fcurves:
         keyframe_points = fcurve.keyframe_points
         for key in keyframe_points:
@@ -292,10 +258,10 @@ def find_keyframe_range(fcurves, current_frame):
             elif key.co[0] > current_frame:
                 if next_frame is None or key.co[0] < next_frame:
                     next_frame = key.co[0]
-        
+
         if previous_frame is not None and next_frame is not None:
             break
-    
+
     return previous_frame, next_frame
 
 
@@ -569,11 +535,7 @@ def copy_rig_drivers():
 
 
 def register():
-    bpy.utils.register_class(create_z)
-    bpy.utils.register_class(align_objs)
-    bpy.utils.register_class(align_obj_to_bone)
-    bpy.utils.register_class(align_bone_to_bone)
-    bpy.utils.register_class(reset_trsfrm)
+    bpy.utils.register_class(create_udim_mask)
     bpy.utils.register_class(remove_materials)
     bpy.utils.register_class(init_settings)
     bpy.utils.register_class(fixed_threads)
@@ -594,11 +556,7 @@ def register():
 
 
 def unregister():
-    bpy.utils.unregister_class(create_z)
-    bpy.utils.unregister_class(align_objs)
-    bpy.utils.unregister_class(align_obj_to_bone)
-    bpy.utils.unregister_class(align_bone_to_bone)
-    bpy.utils.unregister_class(reset_trsfrm)
+    bpy.utils.unregister_class(create_udim_mask)
     bpy.utils.unregister_class(remove_materials)
     bpy.utils.unregister_class(init_settings)
     bpy.utils.unregister_class(fixed_threads)
