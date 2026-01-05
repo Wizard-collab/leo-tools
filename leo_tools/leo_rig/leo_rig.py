@@ -69,6 +69,7 @@ def refresh_viewport():
     bpy.context.evaluated_depsgraph_get().update()
 
 def end():
+    bpy.ops.object.mode_set(mode='OBJECT')
     deselect_all_objects()
     bpy.data.objects["template"].hide_viewport = True
 
