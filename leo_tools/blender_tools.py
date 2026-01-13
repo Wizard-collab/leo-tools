@@ -1,7 +1,9 @@
 import bpy
 import importlib
 from leo_tools import texturing_tools
-texturing_tools.register()
+from leo_tools import corrective_shapekey
+from leo_tools import intermediate_shapekey
+from leo_tools import position_driven_shapekey
 
 
 class CustomToolboxPanel(bpy.types.Panel):
@@ -22,6 +24,12 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.label(text="Rigging Tools")
         layout.operator("leo_tools.mirror_rig_drivers",
                         text="Mirror rig drivers")
+        layout.operator("mesh.create_corrective_shapekey",
+                        text="Create Corrective Shape Key")
+        layout.operator("mesh.create_intermediate_shapekey",
+                        text="Create Intermediate Shape Key")
+        layout.operator("mesh.create_position_driven_shapekey",
+                        text="Add Position Driver")
         layout.label(text="Shading Tools")
         layout.operator("leo_tools.remove_materials", text="Remove materials")
         layout.operator("leo_tools.create_checker",
@@ -535,6 +543,10 @@ def copy_rig_drivers():
 
 
 def register():
+    # Register texturing tools
+    texturing_tools.register()
+    
+    # Register our operators
     bpy.utils.register_class(create_udim_mask)
     bpy.utils.register_class(remove_materials)
     bpy.utils.register_class(init_settings)
@@ -545,6 +557,15 @@ def register():
     bpy.utils.register_class(clean_shapes_names)
     bpy.utils.register_class(mirror_rig_drivers)
     bpy.utils.register_class(CustomToolboxPanel)
+    
+    # Register shape key operators (only if not already registered)
+    if not hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
+        bpy.utils.register_class(corrective_shapekey.MESH_OT_create_corrective_shapekey)
+    if not hasattr(bpy.types, 'MESH_OT_create_intermediate_shapekey'):
+        bpy.utils.register_class(intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
+    if not hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
+        bpy.utils.register_class(position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
+    
     bpy.types.Scene.tween_machine_percentage = bpy.props.FloatProperty(
         name="Percentage",
         description="Percentage between previous and next keyframes",
@@ -566,6 +587,15 @@ def unregister():
     bpy.utils.unregister_class(clean_shapes_names)
     bpy.utils.unregister_class(mirror_rig_drivers)
     bpy.utils.unregister_class(CustomToolboxPanel)
+    
+    # Unregister shape key operators (only if registered)
+    if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
+        bpy.utils.unregister_class(corrective_shapekey.MESH_OT_create_corrective_shapekey)
+    if hasattr(bpy.types, 'MESH_OT_create_intermediate_shapekey'):
+        bpy.utils.unregister_class(intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
+    if hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
+        bpy.utils.unregister_class(position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
+    
     del bpy.types.Scene.tween_machine_percentage
 
 
