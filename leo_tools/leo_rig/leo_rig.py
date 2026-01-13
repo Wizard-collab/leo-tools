@@ -3,6 +3,7 @@ import mathutils
 import os
 
 bones_tuples = [("head","DEF_head"),
+                ("head","head_1_fk"),
                 ("neck", "DEF_neck"),
                 ("back_1", "DEF_back_1"),
                 ("back_2", "DEF_back_2"),
