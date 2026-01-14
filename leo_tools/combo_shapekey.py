@@ -96,16 +96,25 @@ class MESH_OT_create_combo_shapekey(Operator):
             self.report({'ERROR'}, "Both shape keys must have values greater than 0")
             return {'CANCELLED'}
         
-        # Store original values of all other keys
+        # Store original values of ALL keys first
         original_values = {}
         for key in shape_keys.key_blocks:
-            if key != key1 and key != key2:
-                original_values[key.name] = key.value
+            original_values[key.name] = key.value
+        
+        # Zero all keys except the two parent keys
+        for key in shape_keys.key_blocks:
+            if key.name != 'Basis' and key != key1 and key != key2:
                 key.value = 0
         
+        # CRITICAL: Set Basis as active so from_mix=False copies from clean mesh
+        obj.active_shape_key_index = 0
+        
+        # Force update so mesh reflects the current shape key state
+        context.view_layer.update()
+        
         # Set both parent keys to their current values (already set)
-        # Create new shape key from current mix
-        combo_key = obj.shape_key_add(name=self.combo_name, from_mix=True)
+        # Create new shape key from current mix (with only key1 and key2 active)
+        combo_key = obj.shape_key_add(name=self.combo_name, from_mix=False)
         
         # Restore all shape key values
         for key_name, value in original_values.items():

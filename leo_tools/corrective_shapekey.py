@@ -4,7 +4,7 @@ Creates shape keys driven by bone rotations with automatic driver setup
 """
 
 import bpy
-from bpy.props import StringProperty, EnumProperty, FloatProperty
+from bpy.props import StringProperty, EnumProperty, FloatProperty, BoolProperty
 from bpy.types import Operator, Panel
 import math
 
@@ -21,15 +21,22 @@ class MESH_OT_create_corrective_shapekey(Operator):
         default="Corrective"
     )
     
-    rotation_axis: EnumProperty(
-        name="Rotation Axis",
-        description="Bone rotation axis to drive the shape key",
-        items=[
-            ('X', "X Rotation", "Drive by X axis rotation"),
-            ('Y', "Y Rotation", "Drive by Y axis rotation"),
-            ('Z', "Z Rotation", "Drive by Z axis rotation"),
-        ],
-        default='X'
+    use_x_axis: BoolProperty(
+        name="X Axis",
+        description="Drive by X axis rotation",
+        default=True
+    )
+    
+    use_y_axis: BoolProperty(
+        name="Y Axis",
+        description="Drive by Y axis rotation",
+        default=False
+    )
+    
+    use_z_axis: BoolProperty(
+        name="Z Axis",
+        description="Drive by Z axis rotation",
+        default=False
     )
     
     # Store rotation values captured in invoke (hidden from UI)
@@ -78,15 +85,25 @@ class MESH_OT_create_corrective_shapekey(Operator):
             self.report({'ERROR'}, "No mesh found. Please select a mesh object.")
             return {'CANCELLED'}
         
-        # Get the stored rotation value for the selected axis
-        axis_index = ['X', 'Y', 'Z'].index(self.rotation_axis)
-        stored_rotations = [self.stored_rotation_x, self.stored_rotation_y, self.stored_rotation_z]
-        max_value = stored_rotations[axis_index]
+        # Validate at least one axis is selected
+        selected_axes = []
+        if self.use_x_axis:
+            selected_axes.append(('X', self.stored_rotation_x))
+        if self.use_y_axis:
+            selected_axes.append(('Y', self.stored_rotation_y))
+        if self.use_z_axis:
+            selected_axes.append(('Z', self.stored_rotation_z))
         
-        if abs(max_value) < 0.001:
-            self.report({'WARNING'}, 
-                       f"Bone rotation on {self.rotation_axis} axis is nearly zero ({max_value:.4f}). "
-                       "Consider rotating the bone to the desired maximum pose before creating the shape key.")
+        if not selected_axes:
+            self.report({'ERROR'}, "Please select at least one rotation axis")
+            return {'CANCELLED'}
+        
+        # Check if any selected axis has near-zero rotation
+        for axis_name, max_value in selected_axes:
+            if abs(max_value) < 0.001:
+                self.report({'WARNING'}, 
+                           f"Bone rotation on {axis_name} axis is nearly zero ({max_value:.4f}). "
+                           "Consider rotating the bone to the desired maximum pose before creating the shape key.")
         
         # Exit pose mode
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -102,9 +119,28 @@ class MESH_OT_create_corrective_shapekey(Operator):
             basis = mesh_obj.shape_key_add(name='Basis')
             basis.interpolation = 'KEY_LINEAR'
         
-        # Create the corrective shape key
-        shape_key = mesh_obj.shape_key_add(name=self.shapekey_name)
+        # Store and zero all existing shape keys to prevent doubling deformations
+        original_values = {}
+        if mesh_obj.data.shape_keys:
+            for key in mesh_obj.data.shape_keys.key_blocks:
+                if key.name != 'Basis':
+                    original_values[key.name] = key.value
+                    key.value = 0
+            
+            # Set Basis as active to ensure mesh is at rest state
+            mesh_obj.active_shape_key_index = 0
+            
+            # Force update to apply the zeroed shape keys
+            context.view_layer.update()
+        
+        # Create the corrective shape key (from_mix=False copies from active key = Basis)
+        shape_key = mesh_obj.shape_key_add(name=self.shapekey_name, from_mix=False)
         shape_key.value = 0.0
+        
+        # Restore all shape key values
+        for key_name, value in original_values.items():
+            if key_name in mesh_obj.data.shape_keys.key_blocks:
+                mesh_obj.data.shape_keys.key_blocks[key_name].value = value
         
         # Set the new shape key as active
         mesh_obj.active_shape_key_index = len(mesh_obj.data.shape_keys.key_blocks) - 1
@@ -113,25 +149,35 @@ class MESH_OT_create_corrective_shapekey(Operator):
         driver = shape_key.driver_add("value").driver
         driver.type = 'SCRIPTED'
         
-        # Add variable
-        var = driver.variables.new()
-        var.name = "var"
-        var.type = 'TRANSFORMS'
+        # Add variables for each selected axis
+        var_expressions = []
+        for axis_name, max_value in selected_axes:
+            var = driver.variables.new()
+            var.name = f"var{axis_name}"
+            var.type = 'TRANSFORMS'
+            
+            # Setup variable target
+            target = var.targets[0]
+            target.id = armature_obj
+            target.bone_target = bone_name
+            target.transform_type = f'ROT_{axis_name}'
+            target.transform_space = 'LOCAL_SPACE'
+            
+            # Add this axis's normalized expression
+            var_expressions.append(f"(var{axis_name}/{max_value})")
         
-        # Setup variable target
-        target = var.targets[0]
-        target.id = armature_obj
-        target.bone_target = bone_name
-        target.transform_type = f'ROT_{self.rotation_axis}'
-        target.transform_space = 'LOCAL_SPACE'
-        
-        driver.expression = f"var/{max_value}"
+        # Combine expressions: multiply all normalized axes
+        if len(var_expressions) == 1:
+            driver.expression = var_expressions[0]
+        else:
+            driver.expression = " * ".join(var_expressions)
        
+        # Build info message about selected axes
+        axes_info = ", ".join([f"{axis}={math.degrees(val):.2f}°" for axis, val in selected_axes])
         
         self.report({'INFO'}, 
                    f"Created shape key '{self.shapekey_name}' driven by "
-                   f"{armature_obj.name}:{bone_name} {self.rotation_axis} rotation "
-                   f"(max: {math.degrees(max_value):.2f}°)")
+                   f"{armature_obj.name}:{bone_name} ({axes_info})")
         
         return {'FINISHED'}
     
@@ -174,6 +220,19 @@ class MESH_OT_create_corrective_shapekey(Operator):
         self.stored_rotation_z = rotation_euler.z
         
         return context.window_manager.invoke_props_dialog(self)
+    
+    def draw(self, context):
+        """Draw the operator dialog"""
+        layout = self.layout
+        layout.prop(self, "shapekey_name")
+        
+        # Axis selection with checkboxes
+        box = layout.box()
+        box.label(text="Rotation Axes:", icon='ORIENTATION_GIMBAL')
+        row = box.row()
+        row.prop(self, "use_x_axis")
+        row.prop(self, "use_y_axis")
+        row.prop(self, "use_z_axis")
 
 
 class VIEW3D_PT_corrective_shapekey_panel(Panel):
