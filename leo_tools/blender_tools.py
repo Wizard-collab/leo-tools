@@ -4,6 +4,8 @@ from leo_tools import texturing_tools
 from leo_tools import corrective_shapekey
 from leo_tools import intermediate_shapekey
 from leo_tools import position_driven_shapekey
+from leo_tools import mirror_shapekeys
+from leo_tools import combo_shapekey
 
 
 class CustomToolboxPanel(bpy.types.Panel):
@@ -30,6 +32,10 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Create Intermediate Shape Key")
         layout.operator("mesh.create_position_driven_shapekey",
                         text="Add Position Driver")
+        layout.operator("mesh.mirror_shapekeys_and_drivers",
+                        text="Mirror Shape Keys L→R")
+        layout.operator("mesh.create_combo_shapekey",
+                        text="Create Combo Shape Key")
         layout.label(text="Shading Tools")
         layout.operator("leo_tools.remove_materials", text="Remove materials")
         layout.operator("leo_tools.create_checker",
@@ -565,6 +571,12 @@ def register():
         bpy.utils.register_class(intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
     if not hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
         bpy.utils.register_class(position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
+    if not hasattr(bpy.types, 'MESH_OT_mirror_shapekeys_and_drivers'):
+        bpy.utils.register_class(mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
+    if not hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
+        bpy.utils.register_class(combo_shapekey.MESH_OT_create_combo_shapekey)
+    if not hasattr(bpy.types, 'VIEW3D_PT_combo_shapekey'):
+        bpy.utils.register_class(combo_shapekey.VIEW3D_PT_combo_shapekey_panel)
     
     bpy.types.Scene.tween_machine_percentage = bpy.props.FloatProperty(
         name="Percentage",
@@ -595,6 +607,12 @@ def unregister():
         bpy.utils.unregister_class(intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
     if hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
         bpy.utils.unregister_class(position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
+    if hasattr(bpy.types, 'MESH_OT_mirror_shapekeys_and_drivers'):
+        bpy.utils.unregister_class(mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
+    if hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
+        bpy.utils.unregister_class(combo_shapekey.MESH_OT_create_combo_shapekey)
+    if hasattr(bpy.types, 'VIEW3D_PT_combo_shapekey'):
+        bpy.utils.unregister_class(combo_shapekey.VIEW3D_PT_combo_shapekey_panel)
     
     del bpy.types.Scene.tween_machine_percentage
 
