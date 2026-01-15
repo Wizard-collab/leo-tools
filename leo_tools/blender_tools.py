@@ -6,6 +6,7 @@ from leo_tools import intermediate_shapekey
 from leo_tools import position_driven_shapekey
 from leo_tools import mirror_shapekeys
 from leo_tools import combo_shapekey
+from leo_tools import animation_transfer
 
 
 class CustomToolboxPanel(bpy.types.Panel):
@@ -552,6 +553,9 @@ def register():
     # Register texturing tools
     texturing_tools.register()
     
+    # Register animation transfer
+    animation_transfer.register()
+    
     # Register our operators
     bpy.utils.register_class(create_udim_mask)
     bpy.utils.register_class(remove_materials)
@@ -575,8 +579,6 @@ def register():
         bpy.utils.register_class(mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
     if not hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
         bpy.utils.register_class(combo_shapekey.MESH_OT_create_combo_shapekey)
-    if not hasattr(bpy.types, 'VIEW3D_PT_combo_shapekey'):
-        bpy.utils.register_class(combo_shapekey.VIEW3D_PT_combo_shapekey_panel)
     
     bpy.types.Scene.tween_machine_percentage = bpy.props.FloatProperty(
         name="Percentage",
@@ -600,6 +602,9 @@ def unregister():
     bpy.utils.unregister_class(mirror_rig_drivers)
     bpy.utils.unregister_class(CustomToolboxPanel)
     
+    # Unregister animation transfer
+    animation_transfer.unregister()
+    
     # Unregister shape key operators (only if registered)
     if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
         bpy.utils.unregister_class(corrective_shapekey.MESH_OT_create_corrective_shapekey)
@@ -611,8 +616,6 @@ def unregister():
         bpy.utils.unregister_class(mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
     if hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
         bpy.utils.unregister_class(combo_shapekey.MESH_OT_create_combo_shapekey)
-    if hasattr(bpy.types, 'VIEW3D_PT_combo_shapekey'):
-        bpy.utils.unregister_class(combo_shapekey.VIEW3D_PT_combo_shapekey_panel)
     
     del bpy.types.Scene.tween_machine_percentage
 
