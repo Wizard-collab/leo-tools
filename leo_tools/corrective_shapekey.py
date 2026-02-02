@@ -163,8 +163,8 @@ class MESH_OT_create_corrective_shapekey(Operator):
             target.transform_type = f'ROT_{axis_name}'
             target.transform_space = 'LOCAL_SPACE'
             
-            # Add this axis's normalized expression
-            var_expressions.append(f"(var{axis_name}/{max_value})")
+            # Add this axis's normalized expression with max(0, ...) and pow(..., 2)
+            var_expressions.append(f"pow(max(0, var{axis_name}/{max_value}), 2)")
         
         # Combine expressions: multiply all normalized axes
         if len(var_expressions) == 1:

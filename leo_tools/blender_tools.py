@@ -7,6 +7,8 @@ from leo_tools import position_driven_shapekey
 from leo_tools import mirror_shapekeys
 from leo_tools import combo_shapekey
 from leo_tools import animation_transfer
+from leo_tools import empty_from_vertices
+from leo_tools import collection_display
 
 
 class CustomToolboxPanel(bpy.types.Panel):
@@ -37,6 +39,18 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Mirror Shape Keys L→R")
         layout.operator("mesh.create_combo_shapekey",
                         text="Create Combo Shape Key")
+        layout.operator("mesh.create_empty_from_vertices",
+                        text="Empty from 3 Vertices")
+        layout.separator()
+        layout.label(text="Display Tools")
+        layout.operator("object.collection_bounding_box",
+                        text="Collection to Bounding Box")
+        layout.operator("object.collection_textured",
+                        text="Collection to Textured")
+        layout.separator()
+        layout.label(text="Animation Tools")
+        layout.operator("anim.flip_animation",
+                        text="Flip Animation")
         layout.label(text="Shading Tools")
         layout.operator("leo_tools.remove_materials", text="Remove materials")
         layout.operator("leo_tools.create_checker",
@@ -51,15 +65,190 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Add subdivision to selection")
         layout.operator("leo_tools.clean_shapes_names",
                         text="Clean shapes names")
-        layout.label(text="Tween")
+
+
+class AnimToolsPanel(bpy.types.Panel):
+    bl_label = "Anim tools"
+    bl_idname = "VIEW3D_PT_anim_tools"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Anim tools"
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.object
+        
+        # Keyframe Interpolation Mode
+        layout.label(text="Default Interpolation")
+        prefs = context.preferences.edit
+        current_mode = prefs.keyframe_new_interpolation_type
+        
+        if current_mode == 'CONSTANT':
+            mode_text = "Current: Stepped"
+            button_text = "Switch to Curve"
+        else:
+            mode_text = "Current: Curve"
+            button_text = "Switch to Stepped"
+        
+        layout.label(text=mode_text)
+        layout.operator("anim.toggle_interpolation_mode", text=button_text)
+        
+        layout.separator()
+        
+        # Mode switching
+        layout.label(text="Mode Switch")
+        if obj and obj.type == 'ARMATURE':
+            if obj.mode == 'POSE':
+                layout.operator("anim.toggle_pose_object_mode", text="Switch to Object Mode")
+            elif obj.mode == 'OBJECT':
+                layout.operator("anim.toggle_pose_object_mode", text="Switch to Pose Mode")
+            else:
+                layout.label(text="Switch to Object or Pose Mode")
+        else:
+            layout.label(text="Select an armature")
+        
+        layout.separator()
+        
+        # Convert rig interpolation
+        layout.label(text="Convert Rig Keys")
+        if obj and obj.type == 'ARMATURE' and obj.animation_data and obj.animation_data.action:
+            layout.operator("anim.convert_rig_interpolation", text="Stepped ↔ Curve")
+        else:
+            layout.label(text="No animated rig selected")
+        
+        layout.separator()
+        
+        layout.label(text="Tween Machine")
         if obj:
             layout.label(text=f"Selected Object: {obj.name}")
             layout.prop(context.scene, "tween_machine_percentage",
-                        text="Percentage")
+                        text="Percentage", slider=True)
+            if context.scene.tween_stored_pose:
+                layout.operator("anim.reset_tween_stored_pose", text="Clear Stored Pose")
         else:
             layout.label(text="No object selected")
             layout.prop(context.scene, "tween_machine_percentage",
-                        text="Percentage")
+                        text="Percentage", slider=True)
+
+
+class reset_tween_stored_pose(bpy.types.Operator):
+    bl_idname = "anim.reset_tween_stored_pose"
+    bl_label = "Clear Stored Pose"
+    bl_description = "Clear the stored pose from memory"
+
+    def execute(self, context):
+        context.scene.tween_stored_pose = ""
+        self.report({'INFO'}, "Stored pose cleared")
+        return {'FINISHED'}
+
+
+class toggle_pose_object_mode(bpy.types.Operator):
+    bl_idname = "anim.toggle_pose_object_mode"
+    bl_label = "Toggle Pose/Object Mode"
+    bl_description = "Switch between Pose and Object mode for the selected armature"
+
+    def execute(self, context):
+        obj = context.active_object
+        
+        if not obj or obj.type != 'ARMATURE':
+            self.report({'ERROR'}, "Please select an armature")
+            return {'CANCELLED'}
+        
+        if obj.mode == 'POSE':
+            bpy.ops.object.mode_set(mode='OBJECT')
+            self.report({'INFO'}, "Switched to Object Mode")
+        elif obj.mode == 'OBJECT':
+            bpy.ops.object.mode_set(mode='POSE')
+            self.report({'INFO'}, "Switched to Pose Mode")
+        else:
+            # If in another mode (like Edit mode), go to Object mode first
+            bpy.ops.object.mode_set(mode='OBJECT')
+            self.report({'INFO'}, "Switched to Object Mode")
+        
+        return {'FINISHED'}
+
+
+class toggle_interpolation_mode(bpy.types.Operator):
+    bl_idname = "anim.toggle_interpolation_mode"
+    bl_label = "Toggle Interpolation Mode"
+    bl_description = "Toggle between stepped and curve default interpolation for new keyframes"
+
+    def execute(self, context):
+        prefs = context.preferences.edit
+        current_mode = prefs.keyframe_new_interpolation_type
+        
+        if current_mode == 'CONSTANT':
+            prefs.keyframe_new_interpolation_type = 'BEZIER'
+            self.report({'INFO'}, "Default interpolation set to Curve (Bezier)")
+        else:
+            prefs.keyframe_new_interpolation_type = 'CONSTANT'
+            self.report({'INFO'}, "Default interpolation set to Stepped (Constant)")
+        
+        # Force UI refresh
+        for area in context.screen.areas:
+            area.tag_redraw()
+        
+        return {'FINISHED'}
+
+
+class convert_rig_interpolation(bpy.types.Operator):
+    bl_idname = "anim.convert_rig_interpolation"
+    bl_label = "Convert Rig Interpolation"
+    bl_description = "Convert all keyframes on the current rig between stepped and curve interpolation"
+
+    def execute(self, context):
+        obj = context.active_object
+        
+        if not obj or obj.type != 'ARMATURE':
+            self.report({'ERROR'}, "Please select an armature")
+            return {'CANCELLED'}
+        
+        if not obj.animation_data or not obj.animation_data.action:
+            self.report({'ERROR'}, "Armature has no animation data")
+            return {'CANCELLED'}
+        
+        action = obj.animation_data.action
+        
+        # Count interpolation types to determine what to convert to
+        constant_count = 0
+        bezier_count = 0
+        total_keys = 0
+        
+        for fcurve in action.fcurves:
+            for keyframe in fcurve.keyframe_points:
+                total_keys += 1
+                if keyframe.interpolation == 'CONSTANT':
+                    constant_count += 1
+                elif keyframe.interpolation == 'BEZIER':
+                    bezier_count += 1
+        
+        if total_keys == 0:
+            self.report({'WARNING'}, "No keyframes found")
+            return {'CANCELLED'}
+        
+        # Determine target interpolation (convert to whichever is less common)
+        if constant_count >= bezier_count:
+            target_interpolation = 'BEZIER'
+            target_name = "Curve (Bezier)"
+        else:
+            target_interpolation = 'CONSTANT'
+            target_name = "Stepped (Constant)"
+        
+        # Convert all keyframes
+        converted = 0
+        for fcurve in action.fcurves:
+            for keyframe in fcurve.keyframe_points:
+                if keyframe.interpolation != target_interpolation:
+                    keyframe.interpolation = target_interpolation
+                    converted += 1
+        
+        self.report({'INFO'}, f"Converted {converted} keyframes to {target_name}")
+        
+        # Force viewport update
+        for area in context.screen.areas:
+            area.tag_redraw()
+        
+        return {'FINISHED'}
 
 
 class create_udim_mask(bpy.types.Operator):
@@ -156,6 +345,15 @@ def update_tween(self, context):
     current_frame = context.scene.frame_current
     # Get the percentage from the scene property
     factor = context.scene.tween_machine_percentage / 100.0
+    
+    # Get or create stored pose data
+    import json
+    stored_data = {}
+    if context.scene.tween_stored_pose:
+        try:
+            stored_data = json.loads(context.scene.tween_stored_pose)
+        except:
+            stored_data = {}
 
     # Handle armature in pose mode - work with selected bones
     if (context.object and context.object.type == 'ARMATURE' and
@@ -168,6 +366,19 @@ def update_tween(self, context):
         action = armature.animation_data.action
         selected_bones = [
             bone for bone in armature.pose.bones if bone.bone.select]
+        
+        # Store initial pose if not already stored
+        if not stored_data:
+            stored_data = {"armature": armature.name, "bones": {}}
+            for bone in selected_bones:
+                bone_name = bone.name
+                stored_data["bones"][bone_name] = {
+                    "location": list(bone.location),
+                    "rotation_euler": list(bone.rotation_euler),
+                    "rotation_quaternion": list(bone.rotation_quaternion),
+                    "scale": list(bone.scale)
+                }
+            context.scene.tween_stored_pose = json.dumps(stored_data)
 
         for bone in selected_bones:
             bone_name = bone.name
@@ -183,16 +394,45 @@ def update_tween(self, context):
 
                 previous_frame, next_frame = find_keyframe_range(
                     bone_fcurves, current_frame)
-                if previous_frame is None or next_frame is None:
+                
+                # If no keys found, skip
+                if previous_frame is None and next_frame is None:
                     continue
 
                 # Interpolate values for each component (x, y, z or w for quaternion)
                 interpolated_values = []
-                for fcurve in bone_fcurves:
-                    prev_value = fcurve.evaluate(previous_frame)
-                    next_value = fcurve.evaluate(next_frame)
-                    interpolated_value = (1 - factor) * \
-                        prev_value + factor * next_value
+                for i, fcurve in enumerate(bone_fcurves):
+                    if previous_frame is not None and next_frame is not None:
+                        # Both keys exist - normal interpolation
+                        prev_value = fcurve.evaluate(previous_frame)
+                        next_value = fcurve.evaluate(next_frame)
+                        interpolated_value = (1 - factor) * prev_value + factor * next_value
+                    elif previous_frame is not None:
+                        # Only previous key exists - interpolate from previous to stored current
+                        prev_value = fcurve.evaluate(previous_frame)
+                        # Use stored value instead of evaluated current
+                        if bone_name in stored_data.get("bones", {}):
+                            stored_bone = stored_data["bones"][bone_name]
+                            if data_path_base in stored_bone:
+                                current_value = stored_bone[data_path_base][i]
+                            else:
+                                current_value = fcurve.evaluate(current_frame)
+                        else:
+                            current_value = fcurve.evaluate(current_frame)
+                        interpolated_value = (1 - factor) * prev_value + factor * current_value
+                    else:
+                        # Only next key exists - interpolate from stored current to next
+                        next_value = fcurve.evaluate(next_frame)
+                        # Use stored value instead of evaluated current
+                        if bone_name in stored_data.get("bones", {}):
+                            stored_bone = stored_data["bones"][bone_name]
+                            if data_path_base in stored_bone:
+                                current_value = stored_bone[data_path_base][i]
+                            else:
+                                current_value = fcurve.evaluate(current_frame)
+                        else:
+                            current_value = fcurve.evaluate(current_frame)
+                        interpolated_value = (1 - factor) * current_value + factor * next_value
                     interpolated_values.append(interpolated_value)
 
                 # Apply interpolated values to bone
@@ -231,16 +471,29 @@ def update_tween(self, context):
 
                 previous_frame, next_frame = find_keyframe_range(
                     obj_fcurves, current_frame)
-                if previous_frame is None or next_frame is None:
+                
+                # If no keys found, skip
+                if previous_frame is None and next_frame is None:
                     continue
 
                 # Interpolate values for each component
                 interpolated_values = []
                 for fcurve in obj_fcurves:
-                    prev_value = fcurve.evaluate(previous_frame)
-                    next_value = fcurve.evaluate(next_frame)
-                    interpolated_value = (1 - factor) * \
-                        prev_value + factor * next_value
+                    if previous_frame is not None and next_frame is not None:
+                        # Both keys exist - normal interpolation
+                        prev_value = fcurve.evaluate(previous_frame)
+                        next_value = fcurve.evaluate(next_frame)
+                        interpolated_value = (1 - factor) * prev_value + factor * next_value
+                    elif previous_frame is not None:
+                        # Only previous key exists - interpolate from previous to current
+                        prev_value = fcurve.evaluate(previous_frame)
+                        current_value = fcurve.evaluate(current_frame)
+                        interpolated_value = (1 - factor) * prev_value + factor * current_value
+                    else:
+                        # Only next key exists - interpolate from current to next
+                        current_value = fcurve.evaluate(current_frame)
+                        next_value = fcurve.evaluate(next_frame)
+                        interpolated_value = (1 - factor) * current_value + factor * next_value
                     interpolated_values.append(interpolated_value)
 
                 # Apply interpolated values to object
@@ -556,17 +809,43 @@ def register():
     # Register animation transfer
     animation_transfer.register()
     
-    # Register our operators
-    bpy.utils.register_class(create_udim_mask)
-    bpy.utils.register_class(remove_materials)
-    bpy.utils.register_class(init_settings)
-    bpy.utils.register_class(fixed_threads)
-    bpy.utils.register_class(threads_all)
-    bpy.utils.register_class(create_checker)
-    bpy.utils.register_class(add_subdiv)
-    bpy.utils.register_class(clean_shapes_names)
-    bpy.utils.register_class(mirror_rig_drivers)
-    bpy.utils.register_class(CustomToolboxPanel)
+    # Register empty from vertices
+    empty_from_vertices.register()
+    
+    # Register collection display tools
+    collection_display.register()
+    
+    # Register our operators (only if not already registered)
+    if not hasattr(bpy.types, 'ANIM_OT_reset_tween_stored_pose'):
+        bpy.utils.register_class(reset_tween_stored_pose)
+    if not hasattr(bpy.types, 'ANIM_OT_toggle_pose_object_mode'):
+        bpy.utils.register_class(toggle_pose_object_mode)
+    if not hasattr(bpy.types, 'ANIM_OT_toggle_interpolation_mode'):
+        bpy.utils.register_class(toggle_interpolation_mode)
+    if not hasattr(bpy.types, 'ANIM_OT_convert_rig_interpolation'):
+        bpy.utils.register_class(convert_rig_interpolation)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_udim_mask'):
+        bpy.utils.register_class(create_udim_mask)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_materials'):
+        bpy.utils.register_class(remove_materials)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_init_settings'):
+        bpy.utils.register_class(init_settings)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_fixed_threads'):
+        bpy.utils.register_class(fixed_threads)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_threads_all'):
+        bpy.utils.register_class(threads_all)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_checker'):
+        bpy.utils.register_class(create_checker)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_subdiv'):
+        bpy.utils.register_class(add_subdiv)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_clean_shapes_names'):
+        bpy.utils.register_class(clean_shapes_names)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
+        bpy.utils.register_class(mirror_rig_drivers)
+    if not hasattr(bpy.types, 'VIEW3D_PT_leo_tools'):
+        bpy.utils.register_class(CustomToolboxPanel)
+    if not hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
+        bpy.utils.register_class(AnimToolsPanel)
     
     # Register shape key operators (only if not already registered)
     if not hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
@@ -588,22 +867,54 @@ def register():
         max=100.0,
         subtype='PERCENTAGE',
         update=update_tween)
+    
+    bpy.types.Scene.tween_stored_pose = bpy.props.StringProperty(
+        name="Stored Pose",
+        description="JSON data storing the initial pose for tweening",
+        default="")
 
 
 def unregister():
-    bpy.utils.unregister_class(create_udim_mask)
-    bpy.utils.unregister_class(remove_materials)
-    bpy.utils.unregister_class(init_settings)
-    bpy.utils.unregister_class(fixed_threads)
-    bpy.utils.unregister_class(threads_all)
-    bpy.utils.unregister_class(create_checker)
-    bpy.utils.unregister_class(add_subdiv)
-    bpy.utils.unregister_class(clean_shapes_names)
-    bpy.utils.unregister_class(mirror_rig_drivers)
-    bpy.utils.unregister_class(CustomToolboxPanel)
+    # Unregister operators (only if registered)
+    if hasattr(bpy.types, 'ANIM_OT_reset_tween_stored_pose'):
+        bpy.utils.unregister_class(reset_tween_stored_pose)
+    if hasattr(bpy.types, 'ANIM_OT_toggle_pose_object_mode'):
+        bpy.utils.unregister_class(toggle_pose_object_mode)
+    if hasattr(bpy.types, 'ANIM_OT_toggle_interpolation_mode'):
+        bpy.utils.unregister_class(toggle_interpolation_mode)
+    if hasattr(bpy.types, 'ANIM_OT_convert_rig_interpolation'):
+        bpy.utils.unregister_class(convert_rig_interpolation)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_create_udim_mask'):
+        bpy.utils.unregister_class(create_udim_mask)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_materials'):
+        bpy.utils.unregister_class(remove_materials)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_init_settings'):
+        bpy.utils.unregister_class(init_settings)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_fixed_threads'):
+        bpy.utils.unregister_class(fixed_threads)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_threads_all'):
+        bpy.utils.unregister_class(threads_all)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_create_checker'):
+        bpy.utils.unregister_class(create_checker)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_add_subdiv'):
+        bpy.utils.unregister_class(add_subdiv)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_clean_shapes_names'):
+        bpy.utils.unregister_class(clean_shapes_names)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
+        bpy.utils.unregister_class(mirror_rig_drivers)
+    if hasattr(bpy.types, 'VIEW3D_PT_leo_tools'):
+        bpy.utils.unregister_class(CustomToolboxPanel)
+    if hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
+        bpy.utils.unregister_class(AnimToolsPanel)
     
     # Unregister animation transfer
     animation_transfer.unregister()
+    
+    # Unregister empty from vertices
+    empty_from_vertices.unregister()
+    
+    # Unregister collection display tools
+    collection_display.unregister()
     
     # Unregister shape key operators (only if registered)
     if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
@@ -617,7 +928,11 @@ def unregister():
     if hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
         bpy.utils.unregister_class(combo_shapekey.MESH_OT_create_combo_shapekey)
     
-    del bpy.types.Scene.tween_machine_percentage
+    # Delete scene properties (only if they exist)
+    if hasattr(bpy.types.Scene, 'tween_machine_percentage'):
+        del bpy.types.Scene.tween_machine_percentage
+    if hasattr(bpy.types.Scene, 'tween_stored_pose'):
+        del bpy.types.Scene.tween_stored_pose
 
 
 if __name__ == "__main__":
