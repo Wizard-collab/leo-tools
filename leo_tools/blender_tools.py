@@ -65,6 +65,10 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Add subdivision to selection")
         layout.operator("leo_tools.clean_shapes_names",
                         text="Clean shapes names")
+        layout.separator()
+        layout.label(text="Grease Pencil")
+        layout.operator("leo_tools.merge_gp_objects",
+                        text="Duplicate & Bake GP")
 
 
 class AnimToolsPanel(bpy.types.Panel):
@@ -338,6 +342,298 @@ class mirror_rig_drivers(bpy.types.Operator):
 
     def execute(self, context):
         copy_rig_drivers()
+        return {'FINISHED'}
+
+
+class bake_gp_objects(bpy.types.Operator):
+    """Duplicate selected Grease Pencil objects and bake constraints/parenting/modifiers to keyframes"""
+    bl_idname = "leo_tools.merge_gp_objects"
+    bl_label = "Duplicate & Bake GP Objects"
+    bl_description = "Duplicate GP objects and bake constraints/parenting/modifiers (Shrinkwrap, etc.) to keyframes"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    # Support both legacy GP (Blender 3.x) and new GP v3 (Blender 4.0+)
+    GP_TYPES = ('GPENCIL', 'GREASEPENCIL')
+    
+    # Property for user to input the suffix for baked objects
+    bake_suffix: bpy.props.StringProperty(
+        name="Suffix",
+        description="Suffix to add to duplicated object names",
+        default="_baked"
+    )
+    
+    bake_modifiers: bpy.props.BoolProperty(
+        name="Bake Modifiers",
+        description="Bake GP modifiers (Shrinkwrap, etc.) into stroke data",
+        default=True
+    )
+
+    @classmethod
+    def poll(cls, context):
+        # Check if we have at least one GP object selected
+        selected_gp = [obj for obj in context.selected_objects 
+                       if obj.type in cls.GP_TYPES]
+        return len(selected_gp) >= 1
+    
+    def invoke(self, context, event):
+        # Show dialog
+        return context.window_manager.invoke_props_dialog(self)
+    
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "bake_suffix")
+        layout.prop(self, "bake_modifiers")
+
+    def bake_gp_transforms(self, context, gp_obj, frame_start, frame_end):
+        """Bake all constraints and parenting transforms to keyframes for a GP object"""
+        scene = context.scene
+        
+        # Check if object has constraints or parent
+        has_constraints = len(gp_obj.constraints) > 0
+        has_parent = gp_obj.parent is not None
+        
+        if not has_constraints and not has_parent:
+            return False  # Nothing to bake
+        
+        # Store world matrices for each frame
+        world_matrices = {}
+        for frame in range(frame_start, frame_end + 1):
+            scene.frame_set(frame)
+            world_matrices[frame] = gp_obj.matrix_world.copy()
+        
+        # Remove constraints
+        for constraint in gp_obj.constraints[:]:
+            gp_obj.constraints.remove(constraint)
+        
+        # Clear parent while keeping transform
+        if gp_obj.parent:
+            # Store current world matrix
+            mat_world = gp_obj.matrix_world.copy()
+            gp_obj.parent = None
+            gp_obj.matrix_world = mat_world
+        
+        # Bake keyframes
+        for frame, mat in world_matrices.items():
+            scene.frame_set(frame)
+            gp_obj.matrix_world = mat
+            gp_obj.keyframe_insert(data_path="location", frame=frame)
+            gp_obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+            gp_obj.keyframe_insert(data_path="scale", frame=frame)
+        
+        return True
+    
+    def get_gp_modifiers(self, gp_obj):
+        """Get GP modifiers - different attribute name for legacy GP vs GP v3"""
+        # Legacy GP (Blender 3.x) uses grease_pencil_modifiers
+        if hasattr(gp_obj, 'grease_pencil_modifiers') and gp_obj.grease_pencil_modifiers:
+            return gp_obj.grease_pencil_modifiers
+        # GP v3 (Blender 4.0+) uses regular modifiers
+        if hasattr(gp_obj, 'modifiers') and gp_obj.modifiers:
+            return gp_obj.modifiers
+        return None
+    
+    def bake_gp_modifiers(self, context, gp_obj, frame_start, frame_end):
+        """Bake GP modifiers (like Shrinkwrap) into the stroke point data"""
+        # Get the appropriate modifier collection
+        gp_modifiers = self.get_gp_modifiers(gp_obj)
+        
+        if not gp_modifiers or len(gp_modifiers) == 0:
+            return False
+        
+        scene = context.scene
+        depsgraph = context.evaluated_depsgraph_get()
+        gp_data = gp_obj.data
+        
+        # Determine if this is legacy GP or GP v3
+        is_legacy_gp = gp_obj.type == 'GPENCIL'
+        
+        # For each frame, get the evaluated (modifier-applied) stroke positions
+        for frame in range(frame_start, frame_end + 1):
+            scene.frame_set(frame)
+            depsgraph.update()
+            
+            # Get evaluated object with modifiers applied
+            eval_obj = gp_obj.evaluated_get(depsgraph)
+            eval_data = eval_obj.data
+            
+            if is_legacy_gp:
+                # Legacy GP (Blender 3.x): layers -> frames -> strokes -> points
+                for layer_idx, layer in enumerate(gp_data.layers):
+                    if layer_idx >= len(eval_data.layers):
+                        continue
+                    eval_layer = eval_data.layers[layer_idx]
+                    
+                    # Find the frame for this frame number
+                    src_frame = None
+                    eval_frame = None
+                    for f in layer.frames:
+                        if f.frame_number == frame:
+                            src_frame = f
+                            break
+                    for f in eval_layer.frames:
+                        if f.frame_number == frame:
+                            eval_frame = f
+                            break
+                    
+                    if src_frame is None or eval_frame is None:
+                        continue
+                    
+                    # Copy deformed point positions from evaluated to original
+                    for stroke_idx, stroke in enumerate(src_frame.strokes):
+                        if stroke_idx >= len(eval_frame.strokes):
+                            continue
+                        eval_stroke = eval_frame.strokes[stroke_idx]
+                        
+                        for point_idx, point in enumerate(stroke.points):
+                            if point_idx >= len(eval_stroke.points):
+                                continue
+                            # Copy the deformed position
+                            point.co = eval_stroke.points[point_idx].co.copy()
+            else:
+                # GP v3 (Blender 4.0+): structure is different
+                # layers -> frames -> drawing
+                for layer_idx, layer in enumerate(gp_data.layers):
+                    if layer_idx >= len(eval_data.layers):
+                        continue
+                    eval_layer = eval_data.layers[layer_idx]
+                    
+                    # Find matching frames
+                    for frame_idx, gp_frame in enumerate(layer.frames):
+                        if gp_frame.frame_number != frame:
+                            continue
+                        
+                        # Find corresponding eval frame
+                        eval_gp_frame = None
+                        for ef in eval_layer.frames:
+                            if ef.frame_number == frame:
+                                eval_gp_frame = ef
+                                break
+                        
+                        if eval_gp_frame is None:
+                            continue
+                        
+                        # Access drawing data (GP v3 structure)
+                        if hasattr(gp_frame, 'drawing') and hasattr(eval_gp_frame, 'drawing'):
+                            src_drawing = gp_frame.drawing
+                            eval_drawing = eval_gp_frame.drawing
+                            
+                            if hasattr(src_drawing, 'strokes') and hasattr(eval_drawing, 'strokes'):
+                                for stroke_idx, stroke in enumerate(src_drawing.strokes):
+                                    if stroke_idx >= len(eval_drawing.strokes):
+                                        continue
+                                    eval_stroke = eval_drawing.strokes[stroke_idx]
+                                    
+                                    # Copy points - GP v3 uses 'points' attribute
+                                    if hasattr(stroke, 'points') and hasattr(eval_stroke, 'points'):
+                                        for point_idx in range(min(len(stroke.points), len(eval_stroke.points))):
+                                            stroke.points[point_idx].position = eval_stroke.points[point_idx].position.copy()
+        
+        # Remove all GP modifiers after baking
+        modifier_names = [mod.name for mod in gp_modifiers]
+        for mod_name in modifier_names:
+            mod = gp_modifiers.get(mod_name)
+            if mod:
+                gp_modifiers.remove(mod)
+        
+        return True
+    
+    def get_layer_name_attr(self, layer):
+        """Get layer name attribute - 'info' for legacy GP, 'name' for GP v3"""
+        if hasattr(layer, 'info'):
+            return layer.info
+        return layer.name
+    
+    def set_layer_name(self, layer, name):
+        """Set layer name - 'info' for legacy GP, 'name' for GP v3"""
+        if hasattr(layer, 'info'):
+            layer.info = name
+        else:
+            layer.name = name
+
+    def execute(self, context):
+        # Get all selected GP objects
+        selected_gp = [obj for obj in context.selected_objects 
+                       if obj.type in self.GP_TYPES]
+        
+        if len(selected_gp) == 0:
+            self.report({'ERROR'}, "No Grease Pencil objects selected")
+            return {'CANCELLED'}
+        
+        # Store original names before duplicating
+        original_names = {obj.name: obj.name for obj in selected_gp}
+        
+        # Get frame range for baking
+        frame_start = context.scene.frame_start
+        frame_end = context.scene.frame_end
+        current_frame = context.scene.frame_current
+        
+        # Step 1: Duplicate selected GP objects (keeping originals)
+        bpy.ops.object.select_all(action='DESELECT')
+        for obj in selected_gp:
+            obj.select_set(True)
+        context.view_layer.objects.active = selected_gp[0]
+        
+        bpy.ops.object.duplicate()
+        
+        # Get the duplicated objects
+        duplicated_gp = [obj for obj in context.selected_objects 
+                         if obj.type in self.GP_TYPES]
+        
+        # Map duplicates to their original names
+        dup_to_original_name = {}
+        for dup_obj in duplicated_gp:
+            # Blender adds .001 etc to duplicates, find the base name
+            base_name = dup_obj.name.rsplit('.', 1)[0]
+            if base_name in original_names:
+                dup_to_original_name[dup_obj] = base_name
+            else:
+                # Fallback: use the duplicate's name without suffix
+                dup_to_original_name[dup_obj] = base_name
+        
+        # Step 2: Rename duplicated objects and their layers
+        for dup_obj in duplicated_gp:
+            original_name = dup_to_original_name.get(dup_obj, dup_obj.name.rsplit('.', 1)[0])
+            
+            # Rename object
+            new_name = f"{original_name}{self.bake_suffix}"
+            dup_obj.name = new_name
+            if dup_obj.data:
+                dup_obj.data.name = new_name
+            
+            # Rename layers to include original object name
+            gp_data = dup_obj.data
+            for layer in gp_data.layers:
+                current_name = self.get_layer_name_attr(layer)
+                if not current_name.startswith(original_name):
+                    self.set_layer_name(layer, f"{original_name}_{current_name}")
+        
+        # Step 3: Bake GP modifiers (Shrinkwrap, etc.) if enabled
+        modifiers_baked = 0
+        if self.bake_modifiers:
+            for gp_obj in duplicated_gp:
+                if self.bake_gp_modifiers(context, gp_obj, frame_start, frame_end):
+                    modifiers_baked += 1
+        
+        # Step 4: Bake constraints/parenting for all duplicated GP objects
+        transforms_baked = 0
+        for gp_obj in duplicated_gp:
+            if self.bake_gp_transforms(context, gp_obj, frame_start, frame_end):
+                transforms_baked += 1
+        
+        # Restore frame
+        context.scene.frame_set(current_frame)
+        
+        # Ensure all duplicated objects are selected
+        bpy.ops.object.select_all(action='DESELECT')
+        for obj in duplicated_gp:
+            obj.select_set(True)
+        if duplicated_gp:
+            context.view_layer.objects.active = duplicated_gp[0]
+        
+        self.report({'INFO'}, 
+                    f"Duplicated {len(duplicated_gp)} GP objects "
+                    f"({transforms_baked} transforms, {modifiers_baked} modifiers baked)")
+        
         return {'FINISHED'}
 
 
@@ -842,6 +1138,8 @@ def register():
         bpy.utils.register_class(clean_shapes_names)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
         bpy.utils.register_class(mirror_rig_drivers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):
+        bpy.utils.register_class(bake_gp_objects)
     if not hasattr(bpy.types, 'VIEW3D_PT_leo_tools'):
         bpy.utils.register_class(CustomToolboxPanel)
     if not hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
@@ -902,6 +1200,8 @@ def unregister():
         bpy.utils.unregister_class(clean_shapes_names)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
         bpy.utils.unregister_class(mirror_rig_drivers)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):
+        bpy.utils.unregister_class(bake_gp_objects)
     if hasattr(bpy.types, 'VIEW3D_PT_leo_tools'):
         bpy.utils.unregister_class(CustomToolboxPanel)
     if hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
