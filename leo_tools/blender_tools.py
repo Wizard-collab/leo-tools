@@ -1,4 +1,5 @@
 import bpy
+import mathutils
 import importlib
 from leo_tools import texturing_tools
 from leo_tools import corrective_shapekey
@@ -65,6 +66,14 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Add subdivision to selection")
         layout.operator("leo_tools.clean_shapes_names",
                         text="Clean shapes names")
+        layout.operator("leo_tools.add_msh_suffix",
+                        text="Add _MSH to meshes")
+        layout.operator("leo_tools.remove_all_modifiers",
+                        text="Remove all modifiers")
+        layout.operator("leo_tools.remove_all_vertex_groups",
+                        text="Remove all vertex groups")
+        layout.operator("leo_tools.create_cage_deform_joints",
+                        text="Create cage deform joints")
         layout.separator()
         layout.label(text="Grease Pencil")
         layout.operator("leo_tools.merge_gp_objects",
@@ -282,6 +291,98 @@ class clean_shapes_names(bpy.types.Operator):
 
     def execute(self, context):
         clean_object_shapes_names()
+        return {'FINISHED'}
+
+
+class add_msh_suffix(bpy.types.Operator):
+    bl_idname = "leo_tools.add_msh_suffix"
+    bl_label = "Add _MSH suffix to selected meshes"
+    bl_description = "Add _MSH suffix to all selected mesh objects"
+
+    def execute(self, context):
+        renamed_count = 0
+        for obj in context.selected_objects:
+            if obj.type == 'MESH':
+                if not obj.name.endswith('_MSH'):
+                    obj.name = obj.name + '_MSH'
+                    renamed_count += 1
+        self.report({'INFO'}, f"Renamed {renamed_count} mesh(es)")
+        return {'FINISHED'}
+
+
+class remove_all_modifiers(bpy.types.Operator):
+    bl_idname = "leo_tools.remove_all_modifiers"
+    bl_label = "Remove all modifiers from selected objects"
+    bl_description = "Remove all modifiers from all selected objects"
+
+    def execute(self, context):
+        removed_count = 0
+        for obj in context.selected_objects:
+            for mod in obj.modifiers[:]:
+                obj.modifiers.remove(mod)
+                removed_count += 1
+        self.report({'INFO'}, f"Removed {removed_count} modifier(s)")
+        return {'FINISHED'}
+
+
+class remove_all_vertex_groups(bpy.types.Operator):
+    bl_idname = "leo_tools.remove_all_vertex_groups"
+    bl_label = "Remove all vertex groups from selected objects"
+    bl_description = "Remove all vertex groups from all selected objects"
+
+    def execute(self, context):
+        removed_count = 0
+        for obj in context.selected_objects:
+            if obj.type == 'MESH':
+                count = len(obj.vertex_groups)
+                obj.vertex_groups.clear()
+                removed_count += count
+        self.report({'INFO'}, f"Removed {removed_count} vertex group(s)")
+        return {'FINISHED'}
+
+
+class create_cage_deform_joints(bpy.types.Operator):
+    bl_idname = "leo_tools.create_cage_deform_joints"
+    bl_label = "Create cage deform joints"
+    bl_description = "Create a joint for each vertex of the selected mesh, named by vertex ID with _CAGE_DEFORM suffix"
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != 'MESH':
+            self.report({'ERROR'}, "Please select a mesh object")
+            return {'CANCELLED'}
+        
+        mesh = obj.data
+        mesh_name = obj.name
+        
+        # Create armature
+        armature_data = bpy.data.armatures.new(f"{mesh_name}_CAGE_DEFORM")
+        armature_obj = bpy.data.objects.new(f"{mesh_name}_CAGE_DEFORM", armature_data)
+        context.collection.objects.link(armature_obj)
+        
+        # Position armature at mesh location
+        armature_obj.location = obj.location
+        armature_obj.rotation_euler = obj.rotation_euler
+        armature_obj.scale = obj.scale
+        
+        # Enter edit mode to create bones
+        context.view_layer.objects.active = armature_obj
+        bpy.ops.object.mode_set(mode='EDIT')
+        
+        # Create a bone for each vertex
+        for vert in mesh.vertices:
+            bone_name = f"{vert.index}_CAGE_DEFORM"
+            bone = armature_data.edit_bones.new(bone_name)
+            # Get vertex position in world space
+            world_pos = obj.matrix_world @ vert.co
+            # Convert to armature local space
+            local_pos = armature_obj.matrix_world.inverted() @ world_pos
+            bone.head = local_pos
+            bone.tail = local_pos + mathutils.Vector((0, 0, 0.1))
+        
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        self.report({'INFO'}, f"Created {len(mesh.vertices)} joints for cage deform")
         return {'FINISHED'}
 
 
@@ -1136,6 +1237,14 @@ def register():
         bpy.utils.register_class(add_subdiv)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_clean_shapes_names'):
         bpy.utils.register_class(clean_shapes_names)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_msh_suffix'):
+        bpy.utils.register_class(add_msh_suffix)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
+        bpy.utils.register_class(remove_all_modifiers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
+        bpy.utils.register_class(remove_all_vertex_groups)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
+        bpy.utils.register_class(create_cage_deform_joints)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
         bpy.utils.register_class(mirror_rig_drivers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):
@@ -1198,6 +1307,14 @@ def unregister():
         bpy.utils.unregister_class(add_subdiv)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_clean_shapes_names'):
         bpy.utils.unregister_class(clean_shapes_names)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_add_msh_suffix'):
+        bpy.utils.unregister_class(add_msh_suffix)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
+        bpy.utils.unregister_class(remove_all_modifiers)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
+        bpy.utils.unregister_class(remove_all_vertex_groups)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
+        bpy.utils.unregister_class(create_cage_deform_joints)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
         bpy.utils.unregister_class(mirror_rig_drivers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):

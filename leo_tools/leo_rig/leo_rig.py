@@ -126,12 +126,20 @@ def align_edit_bones(rig_bone, target):
 def align_base_bones():
     template_armature, rig_armature = select_armatures()
     for bone_tuple in bones_tuples:
+        if bone_tuple[0] not in template_armature.data.edit_bones:
+            continue
+        if bone_tuple[1] not in rig_armature.data.edit_bones:
+            continue
         target = template_armature.data.edit_bones[bone_tuple[0]]
         rig_bone = rig_armature.data.edit_bones[bone_tuple[1]]
         align_edit_bones(rig_bone, target)
 
 def align_arm_twist_bones():
     template_armature, rig_armature = select_armatures()
+    if "arm_2_L" not in template_armature.data.edit_bones:
+        return
+    if not all(b in rig_armature.data.edit_bones for b in arm_tiwst_bones):
+        return
     arm_2_bone = template_armature.data.edit_bones["arm_2_L"]
     first_twist_bone = rig_armature.data.edit_bones[arm_tiwst_bones[0]]
     second_twist_bone = rig_armature.data.edit_bones[arm_tiwst_bones[1]]
@@ -145,6 +153,10 @@ def align_arm_twist_bones():
 
 def align_leg_twist_bones():
     template_armature, rig_armature = select_armatures()
+    if "leg_2_L" not in template_armature.data.edit_bones:
+        return
+    if not all(b in rig_armature.data.edit_bones for b in leg_tiwst_bones):
+        return
     leg_2_bone = template_armature.data.edit_bones["leg_2_L"]
     first_twist_bone = rig_armature.data.edit_bones[leg_tiwst_bones[0]]
     second_twist_bone = rig_armature.data.edit_bones[leg_tiwst_bones[1]]
@@ -158,38 +170,43 @@ def align_leg_twist_bones():
 
 def place_ik_fk_ctrls():
     template_armature, rig_armature = select_armatures()
-    arm_ik_fk_ctrl = rig_armature.data.edit_bones[ctrl_arm_ik_fk]
-    target_hand = template_armature.data.edit_bones["hand_L"]
-    align_edit_bones(arm_ik_fk_ctrl, target_hand)
-    arm_ik_fk_ctrl.head += mathutils.Vector((2.0, 0.0, 1.0))
-    arm_ik_fk_ctrl.tail = arm_ik_fk_ctrl.head + mathutils.Vector((0.0, 0.0, 1.0))
-    arm_ik_fk_ctrl.roll = 0
     
-    leg_ik_fk_ctrl = rig_armature.data.edit_bones[ctrl_leg_ik_fk]
-    target_foot = template_armature.data.edit_bones["foot_L"]
-    align_edit_bones(leg_ik_fk_ctrl, target_foot)
-    leg_ik_fk_ctrl.head += mathutils.Vector((2.0, 0.0, 1.0))
-    leg_ik_fk_ctrl.tail = leg_ik_fk_ctrl.head + mathutils.Vector((0.0, 0.0, 1.0))
-    leg_ik_fk_ctrl.roll = 0
+    if "hand_L" in template_armature.data.edit_bones and ctrl_arm_ik_fk in rig_armature.data.edit_bones:
+        arm_ik_fk_ctrl = rig_armature.data.edit_bones[ctrl_arm_ik_fk]
+        target_hand = template_armature.data.edit_bones["hand_L"]
+        align_edit_bones(arm_ik_fk_ctrl, target_hand)
+        arm_ik_fk_ctrl.head += mathutils.Vector((2.0, 0.0, 1.0))
+        arm_ik_fk_ctrl.tail = arm_ik_fk_ctrl.head + mathutils.Vector((0.0, 0.0, 1.0))
+        arm_ik_fk_ctrl.roll = 0
+    
+    if "foot_L" in template_armature.data.edit_bones and ctrl_leg_ik_fk in rig_armature.data.edit_bones:
+        leg_ik_fk_ctrl = rig_armature.data.edit_bones[ctrl_leg_ik_fk]
+        target_foot = template_armature.data.edit_bones["foot_L"]
+        align_edit_bones(leg_ik_fk_ctrl, target_foot)
+        leg_ik_fk_ctrl.head += mathutils.Vector((2.0, 0.0, 1.0))
+        leg_ik_fk_ctrl.tail = leg_ik_fk_ctrl.head + mathutils.Vector((0.0, 0.0, 1.0))
+        leg_ik_fk_ctrl.roll = 0
 
 def place_ik_pole_vector_and_target():
     template_armature, rig_armature = select_armatures()
     
-    head = template_armature.data.edit_bones["arm_1_L"].tail + mathutils.Vector((0.0, 5.0, 0.0))
-    ctrl_arm_ik_pole_vector_ = rig_armature.data.edit_bones[ctrl_arm_ik_pole_vector]
-    arm_ik_target_ = rig_armature.data.edit_bones[arm_ik_target]
-    ctrl_arm_ik_pole_vector_.head = head
-    arm_ik_target_.head = head
-    ctrl_arm_ik_pole_vector_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
-    arm_ik_target_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
+    if "arm_1_L" in template_armature.data.edit_bones and ctrl_arm_ik_pole_vector in rig_armature.data.edit_bones and arm_ik_target in rig_armature.data.edit_bones:
+        head = template_armature.data.edit_bones["arm_1_L"].tail + mathutils.Vector((0.0, 5.0, 0.0))
+        ctrl_arm_ik_pole_vector_ = rig_armature.data.edit_bones[ctrl_arm_ik_pole_vector]
+        arm_ik_target_ = rig_armature.data.edit_bones[arm_ik_target]
+        ctrl_arm_ik_pole_vector_.head = head
+        arm_ik_target_.head = head
+        ctrl_arm_ik_pole_vector_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
+        arm_ik_target_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
     
-    head = template_armature.data.edit_bones["leg_1_L"].tail + mathutils.Vector((0.0, -5.0, 0.0))
-    ctrl_leg_ik_pole_vector_ = rig_armature.data.edit_bones[ctrl_leg_ik_pole_vector]
-    leg_ik_target_ = rig_armature.data.edit_bones[leg_ik_target]
-    ctrl_leg_ik_pole_vector_.head = head
-    leg_ik_target_.head = head
-    ctrl_leg_ik_pole_vector_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
-    leg_ik_target_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
+    if "leg_1_L" in template_armature.data.edit_bones and ctrl_leg_ik_pole_vector in rig_armature.data.edit_bones and leg_ik_target in rig_armature.data.edit_bones:
+        head = template_armature.data.edit_bones["leg_1_L"].tail + mathutils.Vector((0.0, -5.0, 0.0))
+        ctrl_leg_ik_pole_vector_ = rig_armature.data.edit_bones[ctrl_leg_ik_pole_vector]
+        leg_ik_target_ = rig_armature.data.edit_bones[leg_ik_target]
+        ctrl_leg_ik_pole_vector_.head = head
+        leg_ik_target_.head = head
+        ctrl_leg_ik_pole_vector_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
+        leg_ik_target_.tail = head + mathutils.Vector((0.0, 0.0, 1.0))
 
 def symmetrize_rig_armature():
     rig_armature = select_rig_armature()

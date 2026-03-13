@@ -85,8 +85,7 @@ def refresh_viewport():
 
 def ik_to_fk_snap():
     armature = bpy.context.object
-    selected_bone = [
-        bone for bone in armature.pose.bones if bone.bone.select][0]
+    selected_bone = bpy.context.selected_pose_bones[0]
     if "leg" in selected_bone.name:
         if '_L' in selected_bone.name:
             align_bn_to_bn(
@@ -113,8 +112,7 @@ def ik_to_fk_snap():
 
 def fk_to_ik_snap():
     armature = bpy.context.object
-    selected_bone = [
-        bone for bone in armature.pose.bones if bone.bone.select][0]
+    selected_bone = bpy.context.selected_pose_bones[0]
     if "leg" in selected_bone.name:
         if '_L' in selected_bone.name:
             align_bn_to_bn(
@@ -149,8 +147,7 @@ def fk_to_ik_snap():
 
 def fk_ik_switch():
     armature = bpy.context.object
-    selected_bone = [
-        bone for bone in armature.pose.bones if bone.bone.select][0]
+    selected_bone = bpy.context.selected_pose_bones[0]
     selected_bone["fk/ik"] = 1.0-selected_bone["fk/ik"]
     armature.update_tag()
     bpy.context.view_layer.update()
