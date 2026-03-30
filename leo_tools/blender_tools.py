@@ -70,6 +70,8 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Add _MSH to meshes")
         layout.operator("leo_tools.remove_all_modifiers",
                         text="Remove all modifiers")
+        layout.operator("leo_tools.apply_mirror_modifiers",
+                text="Apply mirror modifiers")
         layout.operator("leo_tools.remove_all_vertex_groups",
                         text="Remove all vertex groups")
         layout.operator("leo_tools.create_cage_deform_joints",
@@ -322,6 +324,77 @@ class remove_all_modifiers(bpy.types.Operator):
                 obj.modifiers.remove(mod)
                 removed_count += 1
         self.report({'INFO'}, f"Removed {removed_count} modifier(s)")
+        return {'FINISHED'}
+
+
+class apply_mirror_modifiers(bpy.types.Operator):
+    bl_idname = "leo_tools.apply_mirror_modifiers"
+    bl_label = "Apply mirror modifiers on selected objects"
+    bl_description = "Apply all Mirror modifiers on selected objects"
+
+    def execute(self, context):
+        selected_objects = list(context.selected_objects)
+        if not selected_objects:
+            self.report({'ERROR'}, "No object selected")
+            return {'CANCELLED'}
+
+        original_active = context.view_layer.objects.active
+        original_mode = context.mode
+
+        if context.mode != 'OBJECT':
+            try:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            except RuntimeError:
+                self.report({'ERROR'}, "Switch to Object mode to apply modifiers")
+                return {'CANCELLED'}
+
+        applied_count = 0
+        touched_objects = 0
+        failed_count = 0
+
+        for obj in selected_objects:
+            if not hasattr(obj, "modifiers"):
+                continue
+
+            mirror_modifiers = [mod.name for mod in obj.modifiers if mod.type == 'MIRROR']
+            if not mirror_modifiers:
+                continue
+
+            touched_objects += 1
+            bpy.ops.object.select_all(action='DESELECT')
+            obj.select_set(True)
+            context.view_layer.objects.active = obj
+
+            for modifier_name in mirror_modifiers:
+                try:
+                    bpy.ops.object.modifier_apply(modifier=modifier_name)
+                    applied_count += 1
+                except RuntimeError:
+                    failed_count += 1
+
+        bpy.ops.object.select_all(action='DESELECT')
+        for obj in selected_objects:
+            if obj.name in bpy.data.objects:
+                obj.select_set(True)
+
+        if original_active and original_active.name in bpy.data.objects:
+            context.view_layer.objects.active = original_active
+
+        if original_mode != 'OBJECT' and context.view_layer.objects.active:
+            try:
+                bpy.ops.object.mode_set(mode=original_mode)
+            except RuntimeError:
+                pass
+
+        if applied_count == 0 and touched_objects == 0:
+            self.report({'WARNING'}, "No Mirror modifier found on selected objects")
+            return {'CANCELLED'}
+
+        if failed_count > 0:
+            self.report({'WARNING'}, f"Applied {applied_count} Mirror modifier(s), {failed_count} failed")
+            return {'FINISHED'}
+
+        self.report({'INFO'}, f"Applied {applied_count} Mirror modifier(s) on {touched_objects} object(s)")
         return {'FINISHED'}
 
 
@@ -1241,6 +1314,8 @@ def register():
         bpy.utils.register_class(add_msh_suffix)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
         bpy.utils.register_class(remove_all_modifiers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_apply_mirror_modifiers'):
+        bpy.utils.register_class(apply_mirror_modifiers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
         bpy.utils.register_class(remove_all_vertex_groups)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
@@ -1311,6 +1386,8 @@ def unregister():
         bpy.utils.unregister_class(add_msh_suffix)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
         bpy.utils.unregister_class(remove_all_modifiers)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_apply_mirror_modifiers'):
+        bpy.utils.unregister_class(apply_mirror_modifiers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
         bpy.utils.unregister_class(remove_all_vertex_groups)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
