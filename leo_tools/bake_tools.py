@@ -412,6 +412,8 @@ class smart_bake_textures(bpy.types.Operator):
             return True
         if node_name.startswith("__LEOTOOLS_BAKE_TMP_"):
             return True
+        if node_name.startswith("__LEOTOOLS_BAKE_FALLBACK_"):
+            return True
         return False
 
     def _ensure_fallback_source_node(self, material, map_type, source_input):
@@ -457,27 +459,39 @@ class smart_bake_textures(bpy.types.Operator):
         return fallback.outputs[0]
 
     def _ensure_source_reroute(self, material, map_type):
+        location_anchor = None
         if map_type == 'DISPLACEMENT':
-            return
+            output = self._get_output_node(material)
+            if output is None:
+                return
+            input_socket = output.inputs.get('Displacement')
+            if input_socket is None:
+                return
+            location_anchor = output
+        else:
+            principled = self._get_principled_node(material)
+            if principled is None:
+                return
 
-        principled = self._get_principled_node(material)
-        if principled is None:
-            return
-
-        input_socket = self._get_principled_input_socket(principled, map_type)
-        if input_socket is None:
-            return
-
-        # For Normal, only capture linked source chains (no fallback constant).
-        if map_type == 'NORMAL' and not input_socket.links:
-            return
-
-        # Snapshot current default value so we can recover if link is replaced later.
-        self._store_input_default_snapshot(material, principled, map_type)
+            input_socket = self._get_principled_input_socket(principled, map_type)
+            if input_socket is None:
+                return
+            location_anchor = principled
 
         node_tree = material.node_tree
         reroute_name = self._source_reroute_name(map_type)
+        source_socket = None
+        if input_socket.links:
+            candidate_socket = input_socket.links[0].from_socket
+            if not self._is_baked_source_socket(candidate_socket):
+                source_socket = candidate_socket
+
         reroute = node_tree.nodes.get(reroute_name)
+        if source_socket is None:
+            # Keep existing marker if it already stores a previous original source.
+            # This avoids losing the original link when input is currently driven by baked nodes.
+            return
+
         if reroute is None or reroute.type != 'REROUTE':
             reroute = node_tree.nodes.new(type='NodeReroute')
             reroute.name = reroute_name
@@ -486,19 +500,12 @@ class smart_bake_textures(bpy.types.Operator):
                 map_index = self._map_order().index(map_type)
             except ValueError:
                 map_index = 0
-            reroute.location = (principled.location.x - 260, principled.location.y - (map_index * 20))
+            reroute.location = (location_anchor.location.x - 260, location_anchor.location.y - (map_index * 20))
 
-        if reroute.inputs[0].links:
-            return
-
-        source_socket = None
-        if input_socket.links:
-            candidate_socket = input_socket.links[0].from_socket
-            if not self._is_baked_source_socket(candidate_socket):
-                source_socket = candidate_socket
-
-        if source_socket is None:
-            source_socket = self._ensure_fallback_source_node(material, map_type, input_socket)
+        for link in reroute.inputs[0].links[:]:
+            if link.from_socket == source_socket:
+                return
+            node_tree.links.remove(link)
 
         try:
             node_tree.links.new(source_socket, reroute.inputs[0])
@@ -590,6 +597,44 @@ class smart_bake_textures(bpy.types.Operator):
 
         if map_type == 'DISPLACEMENT':
             source_input = output.inputs.get('Displacement')
+            if source_input is None:
+                node_tree.nodes.remove(emission)
+                return None
+
+            source_socket = None
+            default_value = None
+
+            if source_input.links:
+                disp_from_socket = source_input.links[0].from_socket
+                disp_from_node = getattr(disp_from_socket, 'node', None)
+
+                # If material output is driven by a Displacement node, bake its Height input source.
+                if disp_from_node and disp_from_node.type == 'DISPLACEMENT':
+                    height_input = disp_from_node.inputs.get('Height')
+                    if height_input is not None:
+                        if height_input.links:
+                            source_socket = height_input.links[0].from_socket
+                        else:
+                            try:
+                                default_value = float(height_input.default_value)
+                            except (TypeError, ValueError):
+                                default_value = 0.0
+                else:
+                    source_socket = disp_from_socket
+
+            if source_socket is not None:
+                links.new(source_socket, emission.inputs['Color'])
+            else:
+                if default_value is None:
+                    default_value = 0.0
+                emission.inputs['Color'].default_value = _to_rgba(default_value)
+
+            links.new(emission.outputs['Emission'], output.inputs['Surface'])
+            return {
+                'material': material,
+                'emission': emission,
+                'original_surface_links': original_surface_links
+            }
         else:
             if principled is None:
                 node_tree.nodes.remove(emission)
@@ -606,12 +651,8 @@ class smart_bake_textures(bpy.types.Operator):
         elif source_input.links:
             links.new(source_input.links[0].from_socket, emission.inputs['Color'])
         else:
-            stored_default = self._get_stored_default(material, map_type)
-            if stored_default is not None:
-                emission.inputs['Color'].default_value = _to_rgba(stored_default)
-            else:
-                default_value = source_input.default_value
-                emission.inputs['Color'].default_value = _to_rgba(default_value)
+            default_value = source_input.default_value
+            emission.inputs['Color'].default_value = _to_rgba(default_value)
 
         links.new(emission.outputs['Emission'], output.inputs['Surface'])
         return {
@@ -651,6 +692,12 @@ class smart_bake_textures(bpy.types.Operator):
         for material in materials:
             if not material.use_nodes or not material.node_tree:
                 continue
+
+            # Cleanup legacy fallback helpers from older bake logic.
+            node_tree = material.node_tree
+            for node in list(node_tree.nodes):
+                if node.name.startswith("__LEOTOOLS_BAKE_FALLBACK_"):
+                    node_tree.nodes.remove(node)
 
             frame = self._ensure_bake_frame(material)
 
@@ -1214,8 +1261,16 @@ def _force_connect_original_inputs(material):
     output = _force_get_output_node(material)
     if output and output.inputs.get('Displacement'):
         for link in output.inputs['Displacement'].links[:]:
-            if link.from_node and link.from_node.name.startswith("BAKE_"):
-                links.remove(link)
+            links.remove(link)
+
+        displacement_reroute = material.node_tree.nodes.get(_force_source_reroute_name('DISPLACEMENT'))
+        if displacement_reroute and displacement_reroute.type == 'REROUTE' and displacement_reroute.inputs[0].links:
+            source_socket = displacement_reroute.inputs[0].links[0].from_socket
+            try:
+                links.new(source_socket, output.inputs['Displacement'])
+                changed += 1
+            except RuntimeError:
+                pass
 
     return changed
 
