@@ -28,6 +28,8 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.label(text="Texturing")
         layout.operator("leo_tools.create_udim_mask",
                         text="Create mask with UDIMS")
+        layout.operator("leo_tools.create_udim_paint_mask",
+                text="Create UDIM paint mask")
         layout.operator("leo_tools.smart_bake_textures",
                 text="Bake selected textures")
         layout.label(text="Rigging Tools")
@@ -51,6 +53,8 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Collection to Bounding Box")
         layout.operator("object.collection_textured",
                         text="Collection to Textured")
+        layout.operator("leo_tools.local_copy_linked_collection",
+                text="Local copy linked collection")
         layout.separator()
         layout.label(text="Animation Tools")
         layout.operator("anim.flip_animation",
@@ -288,6 +292,348 @@ class create_udim_mask(bpy.types.Operator):
         bpy.ops.object.create_udim_map('INVOKE_DEFAULT')
         return {'FINISHED'}
 
+
+class create_udim_paint_mask(bpy.types.Operator):
+    bl_idname = "leo_tools.create_udim_paint_mask"
+    bl_label = "Create UDIM paint mask"
+    bl_description = "Create UDIM mask, add it as image texture node in active shader, and switch to Texture Paint mode"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    image_name: bpy.props.StringProperty(
+        name="Image Name",
+        description="Name for the UDIM paint mask image",
+        default="UDIM_Mask"
+    )
+
+    image_width: bpy.props.IntProperty(
+        name="Resolution",
+        description="Width and height of the created UDIM mask image",
+        default=4096,
+        min=64,
+        max=16384
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object is not None and context.active_object.type == 'MESH'
+
+    def invoke(self, context, event):
+        obj = context.active_object
+        if obj:
+            self.image_name = f"{obj.name}_mask"
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        obj = context.active_object
+        if obj is None or obj.type != 'MESH':
+            self.report({'ERROR'}, "Please select a mesh object")
+            return {'CANCELLED'}
+
+        image = texturing_tools.create_map_with_udims(self.image_name, self.image_width)
+        if image is None:
+            image = bpy.data.images.get(self.image_name)
+        if image is None:
+            self.report({'ERROR'}, "Could not create UDIM mask image")
+            return {'CANCELLED'}
+
+        if obj.active_material is None:
+            obj.active_material = bpy.data.materials.new(name=f"{obj.name}_MAT")
+
+        material = obj.active_material
+        material.use_nodes = True
+        node_tree = material.node_tree
+
+        tex_node_name = f"UDIM_MASK_{image.name}"
+        tex_node = node_tree.nodes.get(tex_node_name)
+        if tex_node is None or tex_node.type != 'TEX_IMAGE':
+            tex_node = node_tree.nodes.new(type='ShaderNodeTexImage')
+            tex_node.name = tex_node_name
+            tex_node.label = tex_node_name
+
+            principled = None
+            for node in node_tree.nodes:
+                if node.type == 'BSDF_PRINCIPLED':
+                    principled = node
+                    break
+            if principled:
+                tex_node.location = (principled.location.x - 420, principled.location.y - 260)
+
+        tex_node.image = image
+        for node in node_tree.nodes:
+            node.select = False
+        tex_node.select = True
+        node_tree.nodes.active = tex_node
+
+        if context.mode != 'OBJECT':
+            try:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            except RuntimeError:
+                pass
+
+        try:
+            bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+        except RuntimeError:
+            self.report({'WARNING'}, f"Created UDIM mask '{image.name}', but could not switch to Texture Paint mode")
+            return {'FINISHED'}
+
+        # Configure paint session defaults for the created mask.
+        image_paint = context.scene.tool_settings.image_paint
+        if hasattr(image_paint, 'mode'):
+            try:
+                image_paint.mode = 'IMAGE'
+            except TypeError:
+                pass
+
+        if hasattr(image_paint, 'canvas'):
+            image_paint.canvas = image
+
+        if obj.data and obj.data.uv_layers:
+            obj.data.uv_layers.active_index = 0
+
+        if hasattr(tex_node, 'interpolation'):
+            try:
+                tex_node.interpolation = 'Linear'
+            except TypeError:
+                pass
+
+        self.report({'INFO'}, f"Created UDIM mask '{image.name}', added node in active shader, switched to Texture Paint")
+        return {'FINISHED'}
+
+
+class local_copy_linked_collection(bpy.types.Operator):
+    bl_idname = "leo_tools.local_copy_linked_collection"
+    bl_label = "Local copy linked collection"
+    bl_description = "Create a full local copy of linked collections from selection"
+
+    def _next_local_name(self, base_name, existing_names):
+        candidate = f"{base_name}_LOCAL"
+        if candidate not in existing_names:
+            return candidate
+
+        index = 2
+        while True:
+            candidate = f"{base_name}_LOCAL_{index:02d}"
+            if candidate not in existing_names:
+                return candidate
+            index += 1
+
+    def _parent_map(self):
+        parent_map = {}
+        for parent in bpy.data.collections:
+            for child in parent.children:
+                parent_map.setdefault(child, []).append(parent)
+        return parent_map
+
+    def _linked_source_collection(self, collection):
+        if collection is None:
+            return None
+
+        if collection.library:
+            return collection
+
+        override = getattr(collection, 'override_library', None)
+        if override and override.reference and override.reference.library:
+            return override.reference
+
+        return None
+
+    def _linked_ancestor_collection(self, collection, parent_map):
+        if collection is None:
+            return None
+
+        direct = self._linked_source_collection(collection)
+        if direct:
+            return direct
+
+        visited = set()
+        stack = list(parent_map.get(collection, []))
+        while stack:
+            current = stack.pop()
+            key = current.as_pointer()
+            if key in visited:
+                continue
+            visited.add(key)
+
+            linked = self._linked_source_collection(current)
+            if linked:
+                return linked
+
+            stack.extend(parent_map.get(current, []))
+
+        return None
+
+    def _collect_target_collections(self, context):
+        targets = []
+        parent_map = self._parent_map()
+
+        def add_target(candidate):
+            linked = self._linked_source_collection(candidate)
+            if not linked:
+                linked = self._linked_ancestor_collection(candidate, parent_map)
+            if linked:
+                targets.append(linked)
+
+        for obj in context.selected_objects:
+            if obj.instance_type == 'COLLECTION' and obj.instance_collection:
+                add_target(obj.instance_collection)
+
+            for coll in obj.users_collection:
+                add_target(coll)
+
+            if obj.library:
+                # Fallback: find a linked collection containing this linked object.
+                for coll in bpy.data.collections:
+                    if not coll.library:
+                        continue
+                    if obj.name in coll.all_objects:
+                        targets.append(coll)
+                        break
+
+        active_layer_collection = context.view_layer.active_layer_collection
+        if active_layer_collection:
+            add_target(active_layer_collection.collection)
+
+        # Preserve order while removing duplicates
+        deduped = []
+        seen = set()
+        for coll in targets:
+            key = coll.as_pointer()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(coll)
+        return deduped
+
+    def _copy_object_deep(self, src_obj, object_map):
+        new_obj = src_obj.copy()
+        new_obj.name = self._next_local_name(src_obj.name, bpy.data.objects.keys())
+
+        if src_obj.data:
+            try:
+                new_obj.data = src_obj.data.copy()
+                if new_obj.data:
+                    new_obj.data.name = self._next_local_name(src_obj.data.name, getattr(bpy.data, src_obj.data.__class__.__name__.lower() + 's', bpy.data.meshes).keys())
+            except RuntimeError:
+                pass
+
+        if new_obj.animation_data and new_obj.animation_data.action:
+            try:
+                new_obj.animation_data.action = new_obj.animation_data.action.copy()
+                if new_obj.animation_data.action:
+                    new_obj.animation_data.action.name = self._next_local_name(new_obj.animation_data.action.name, bpy.data.actions.keys())
+            except RuntimeError:
+                pass
+
+        if new_obj.data and hasattr(new_obj.data, 'materials'):
+            for slot_index, material in enumerate(list(new_obj.data.materials)):
+                if material is None:
+                    continue
+                try:
+                    copied_mat = material.copy()
+                    copied_mat.name = self._next_local_name(material.name, bpy.data.materials.keys())
+                    new_obj.data.materials[slot_index] = copied_mat
+                except RuntimeError:
+                    pass
+
+        object_map[src_obj] = new_obj
+        return new_obj
+
+    def _copy_collection_recursive(self, src_collection, object_map):
+        new_collection_name = self._next_local_name(src_collection.name, bpy.data.collections.keys())
+        new_collection = bpy.data.collections.new(new_collection_name)
+
+        for src_obj in src_collection.objects:
+            new_obj = self._copy_object_deep(src_obj, object_map)
+            new_collection.objects.link(new_obj)
+
+        for child in src_collection.children:
+            new_child = self._copy_collection_recursive(child, object_map)
+            new_collection.children.link(new_child)
+
+        return new_collection
+
+    def _parent_collections_of(self, target_collection):
+        parents = []
+        for parent in bpy.data.collections:
+            if any(child == target_collection for child in parent.children):
+                parents.append(parent)
+        return parents
+
+    def _link_collection_like_source(self, context, src_collection, new_collection):
+        linked = 0
+
+        for parent in self._parent_collections_of(src_collection):
+            if any(child == new_collection for child in parent.children):
+                continue
+            try:
+                parent.children.link(new_collection)
+                linked += 1
+            except RuntimeError:
+                pass
+
+        for scene in bpy.data.scenes:
+            has_src = any(child == src_collection for child in scene.collection.children)
+            has_new = any(child == new_collection for child in scene.collection.children)
+            if has_src and not has_new:
+                try:
+                    scene.collection.children.link(new_collection)
+                    linked += 1
+                except RuntimeError:
+                    pass
+
+        if linked == 0:
+            try:
+                context.scene.collection.children.link(new_collection)
+            except RuntimeError:
+                pass
+
+    def _restore_internal_relations(self, object_map):
+        for src_obj, new_obj in object_map.items():
+            if src_obj.parent in object_map:
+                new_obj.parent = object_map[src_obj.parent]
+                new_obj.matrix_parent_inverse = src_obj.matrix_parent_inverse.copy()
+
+            for constraint in new_obj.constraints:
+                target = getattr(constraint, 'target', None)
+                if target in object_map:
+                    constraint.target = object_map[target]
+
+            if hasattr(new_obj, 'modifiers'):
+                for modifier in new_obj.modifiers:
+                    target_obj = getattr(modifier, 'object', None)
+                    if target_obj in object_map:
+                        modifier.object = object_map[target_obj]
+
+    def execute(self, context):
+        linked_collections = self._collect_target_collections(context)
+        if not linked_collections:
+            self.report({'ERROR'}, "No linked collection found. Select a linked collection instance or an object from a linked hierarchy")
+            return {'CANCELLED'}
+
+        copied_count = 0
+        object_map = {}
+        collection_map = {}
+
+        for src_collection in linked_collections:
+            new_collection = self._copy_collection_recursive(src_collection, object_map)
+            self._link_collection_like_source(context, src_collection, new_collection)
+            collection_map[src_collection] = new_collection
+            copied_count += 1
+
+        self._restore_internal_relations(object_map)
+
+        # Repoint selected collection instances to local copies when possible.
+        repointed_instances = 0
+        for obj in context.selected_objects:
+            if obj.instance_type == 'COLLECTION' and obj.instance_collection in collection_map:
+                obj.instance_collection = collection_map[obj.instance_collection]
+                repointed_instances += 1
+
+        self.report(
+            {'INFO'},
+            f"Created {copied_count} local collection copy(ies), {len(object_map)} object copy(ies), repointed {repointed_instances} instance(s)"
+        )
+        return {'FINISHED'}
 
 
 class add_subdiv(bpy.types.Operator):
@@ -1284,6 +1630,18 @@ def init_render_settings():
     bpy.context.scene.render.engine = 'CYCLES'
     bpy.context.scene.cycles.device = 'GPU'
     bpy.context.scene.render.film_transparent = True
+    # Enable viewport denoising and disable adaptive sampling (noise threshold).
+    bpy.context.scene.cycles.use_preview_denoising = True
+    bpy.context.scene.cycles.use_adaptive_sampling = False
+    if hasattr(bpy.context.scene.cycles, 'use_preview_adaptive_sampling'):
+        bpy.context.scene.cycles.use_preview_adaptive_sampling = False
+    # Light paths
+    bpy.context.scene.cycles.max_bounces = 32
+    bpy.context.scene.cycles.diffuse_bounces = 32
+    bpy.context.scene.cycles.glossy_bounces = 32
+    bpy.context.scene.cycles.transmission_bounces = 32
+    bpy.context.scene.cycles.volume_bounces = 32
+    bpy.context.scene.cycles.transparent_max_bounces = 32
     '''
     bpy.context.scene.render.image_settings.file_format = 'OPEN_EXR_MULTILAYER'
     bpy.context.scene.render.image_settings.color_management = 'OVERRIDE'
@@ -1427,6 +1785,10 @@ def register():
         bpy.utils.register_class(convert_rig_interpolation)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_udim_mask'):
         bpy.utils.register_class(create_udim_mask)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_udim_paint_mask'):
+        bpy.utils.register_class(create_udim_paint_mask)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_local_copy_linked_collection'):
+        bpy.utils.register_class(local_copy_linked_collection)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_materials'):
         bpy.utils.register_class(remove_materials)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_init_settings'):
@@ -1509,6 +1871,10 @@ def unregister():
         bpy.utils.unregister_class(convert_rig_interpolation)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_create_udim_mask'):
         bpy.utils.unregister_class(create_udim_mask)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_create_udim_paint_mask'):
+        bpy.utils.unregister_class(create_udim_paint_mask)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_local_copy_linked_collection'):
+        bpy.utils.unregister_class(local_copy_linked_collection)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_materials'):
         bpy.utils.unregister_class(remove_materials)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_init_settings'):

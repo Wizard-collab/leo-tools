@@ -17,6 +17,7 @@ class smart_bake_textures(bpy.types.Operator):
             ('ROUGHNESS', "Roughness", "Bake roughness"),
             ('METALLIC', "Metallic", "Bake metallic"),
             ('NORMAL', "Normal", "Bake normal"),
+            ('DISPLACEMENT', "Displacement", "Bake displacement"),
             ('SUBSURFACE', "Subsurface", "Bake subsurface weight"),
             ('EMISSION', "Emission", "Bake emission color"),
             ('ALPHA', "Alpha", "Bake alpha"),
@@ -68,6 +69,16 @@ class smart_bake_textures(bpy.types.Operator):
         default=""
     )
 
+    save_format: bpy.props.EnumProperty(
+        name="Save Format",
+        description="File format used when saving baked maps",
+        items=[
+            ('PNG', "PNG", "Save baked maps as PNG"),
+            ('OPEN_EXR', "OpenEXR", "Save baked maps as OpenEXR")
+        ],
+        default='PNG'
+    )
+
     @classmethod
     def poll(cls, context):
         return any(obj.type == 'MESH' for obj in context.selected_objects)
@@ -89,6 +100,7 @@ class smart_bake_textures(bpy.types.Operator):
         layout.prop(self, "basecolor_colorspace")
         layout.prop(self, "plug_baked_to_bsdf")
         layout.prop(self, "output_dir")
+        layout.prop(self, "save_format")
         layout.label(text="Map Types")
         layout.prop(self, "map_types")
 
@@ -225,6 +237,7 @@ class smart_bake_textures(bpy.types.Operator):
             'ROUGHNESS': 'roughness',
             'METALLIC': 'metallic',
             'NORMAL': 'normal',
+            'DISPLACEMENT': 'displacement',
             'SUBSURFACE': 'subsurface',
             'EMISSION': 'emission',
             'ALPHA': 'alpha',
@@ -256,6 +269,7 @@ class smart_bake_textures(bpy.types.Operator):
             'ROUGHNESS',
             'METALLIC',
             'NORMAL',
+            'DISPLACEMENT',
             'SUBSURFACE',
             'SUBSURFACE_RADIUS',
             'SUBSURFACE_SCALE',
@@ -272,6 +286,7 @@ class smart_bake_textures(bpy.types.Operator):
             'BASECOLOR': ['Base Color'],
             'ROUGHNESS': ['Roughness'],
             'METALLIC': ['Metallic'],
+            'NORMAL': ['Normal'],
             'SUBSURFACE': ['Subsurface Weight', 'Subsurface'],
             'EMISSION': ['Emission Color', 'Emission'],
             'ALPHA': ['Alpha'],
@@ -387,7 +402,7 @@ class smart_bake_textures(bpy.types.Operator):
             return False
 
         node_name = getattr(node, 'name', '')
-        if node.type == 'TEX_IMAGE' and node_name.startswith("BAKE_"):
+        if node_name.startswith("BAKE_"):
             return True
         if node_name.startswith("__LEOTOOLS_BAKE_TMP_"):
             return True
@@ -436,7 +451,7 @@ class smart_bake_textures(bpy.types.Operator):
         return fallback.outputs[0]
 
     def _ensure_source_reroute(self, material, map_type):
-        if map_type == 'NORMAL':
+        if map_type == 'DISPLACEMENT':
             return
 
         principled = self._get_principled_node(material)
@@ -445,6 +460,10 @@ class smart_bake_textures(bpy.types.Operator):
 
         input_socket = self._get_principled_input_socket(principled, map_type)
         if input_socket is None:
+            return
+
+        # For Normal, only capture linked source chains (no fallback constant).
+        if map_type == 'NORMAL' and not input_socket.links:
             return
 
         # Snapshot current default value so we can recover if link is replaced later.
@@ -497,6 +516,7 @@ class smart_bake_textures(bpy.types.Operator):
         if map_type in {
             'ROUGHNESS',
             'METALLIC',
+            'DISPLACEMENT',
             'SUBSURFACE',
             'SUBSURFACE_SCALE',
             'TRANSMISSION',
@@ -524,13 +544,14 @@ class smart_bake_textures(bpy.types.Operator):
     def _setup_emission_override(self, material, map_type):
         node_tree = material.node_tree
         links = node_tree.links
-        principled = self._get_principled_node(material)
         output = self._get_output_node(material)
-        if not principled or not output:
+        if not output:
             return None
 
         if map_type == 'NORMAL':
             return None
+
+        principled = self._get_principled_node(material)
 
         original_surface_links = [
             (link.from_socket, link.to_socket)
@@ -542,7 +563,14 @@ class smart_bake_textures(bpy.types.Operator):
         emission = node_tree.nodes.new(type='ShaderNodeEmission')
         emission.name = f"__BAKE_TMP_EMISSION_{self._map_suffix(map_type)}"
 
-        source_input = self._get_principled_input_socket(principled, map_type)
+        if map_type == 'DISPLACEMENT':
+            source_input = output.inputs.get('Displacement')
+        else:
+            if principled is None:
+                node_tree.nodes.remove(emission)
+                return None
+            source_input = self._get_principled_input_socket(principled, map_type)
+
         if source_input is None:
             node_tree.nodes.remove(emission)
             return None
@@ -708,6 +736,28 @@ class smart_bake_textures(bpy.types.Operator):
                     links.new(normal_map.outputs['Normal'], normal_input)
                     continue
 
+                if map_type == 'DISPLACEMENT':
+                    output = self._get_output_node(material)
+                    if output is None:
+                        continue
+
+                    displacement_node_name = f"{bake_node_name}_displacement"
+                    displacement_node = node_tree.nodes.get(displacement_node_name)
+                    if displacement_node is None or displacement_node.type != 'DISPLACEMENT':
+                        displacement_node = node_tree.nodes.new(type='ShaderNodeDisplacement')
+                        displacement_node.name = displacement_node_name
+                        displacement_node.label = displacement_node_name
+                        displacement_node.location = (bake_node.location.x + 220, bake_node.location.y)
+
+                    for link in displacement_node.inputs['Height'].links[:]:
+                        links.remove(link)
+                    for link in output.inputs['Displacement'].links[:]:
+                        links.remove(link)
+
+                    links.new(bake_node.outputs['Color'], displacement_node.inputs['Height'])
+                    links.new(displacement_node.outputs['Displacement'], output.inputs['Displacement'])
+                    continue
+
                 bsdf_input = self._get_principled_input_socket(principled, map_type)
                 if bsdf_input is None:
                     continue
@@ -739,15 +789,17 @@ class smart_bake_textures(bpy.types.Operator):
     def _save_baked_images(self, images_by_type):
         save_dir = self._get_save_directory()
         failed = []
+        save_format = getattr(self, 'save_format', 'PNG')
+        extension = '.exr' if save_format == 'OPEN_EXR' else '.png'
 
         for map_type, image in images_by_type.items():
             suffix = self._map_suffix(map_type)
-            filename = f"{self.bake_name}_{suffix}.<UDIM>.png"
+            filename = f"{self.bake_name}_{suffix}.<UDIM>{extension}"
             filepath = os.path.join(save_dir, filename)
 
             try:
                 image.filepath_raw = filepath
-                image.file_format = 'PNG'
+                image.file_format = save_format
                 image.save()
             except RuntimeError:
                 failed.append(image.name)
@@ -974,12 +1026,10 @@ class smart_bake_textures(bpy.types.Operator):
 
 
 def register():
-    # Ensure updated operator properties are reflected after script reloads.
     try:
         bpy.utils.unregister_class(smart_bake_textures)
     except RuntimeError:
         pass
-
     bpy.utils.register_class(smart_bake_textures)
 
 
