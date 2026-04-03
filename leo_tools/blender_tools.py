@@ -32,6 +32,10 @@ class CustomToolboxPanel(bpy.types.Panel):
                 text="Create UDIM paint mask")
         layout.operator("leo_tools.smart_bake_textures",
                 text="Bake selected textures")
+        layout.operator("leo_tools.force_baked_inputs",
+            text="Force baked inputs")
+        layout.operator("leo_tools.force_original_inputs",
+            text="Force original inputs")
         layout.label(text="Rigging Tools")
         layout.operator("leo_tools.mirror_rig_drivers",
                         text="Mirror rig drivers")

@@ -19,7 +19,7 @@ class smart_bake_textures(bpy.types.Operator):
             ('NORMAL', "Normal", "Bake normal"),
             ('DISPLACEMENT', "Displacement", "Bake displacement"),
             ('SUBSURFACE', "Subsurface", "Bake subsurface weight"),
-            ('EMISSION', "Emission", "Bake emission color"),
+            ('EMISSION', "Emission", "Bake emission color and emission strength"),
             ('ALPHA', "Alpha", "Bake alpha"),
             ('TRANSMISSION', "Transmission", "Bake transmission"),
             ('SHEEN', "Sheen", "Bake sheen and related parameters")
@@ -240,6 +240,7 @@ class smart_bake_textures(bpy.types.Operator):
             'DISPLACEMENT': 'displacement',
             'SUBSURFACE': 'subsurface',
             'EMISSION': 'emission',
+            'EMISSION_STRENGTH': 'emission_strength',
             'ALPHA': 'alpha',
             'TRANSMISSION': 'transmission',
             'SUBSURFACE_RADIUS': 'subsurface_radius',
@@ -261,6 +262,9 @@ class smart_bake_textures(bpy.types.Operator):
             expanded.add('SHEEN_ROUGHNESS')
             expanded.add('SHEEN_TINT')
 
+        if 'EMISSION' in expanded:
+            expanded.add('EMISSION_STRENGTH')
+
         return expanded
 
     def _map_order(self):
@@ -276,6 +280,7 @@ class smart_bake_textures(bpy.types.Operator):
             'TRANSMISSION',
             'ALPHA',
             'EMISSION',
+            'EMISSION_STRENGTH',
             'SHEEN',
             'SHEEN_ROUGHNESS',
             'SHEEN_TINT'
@@ -289,6 +294,7 @@ class smart_bake_textures(bpy.types.Operator):
             'NORMAL': ['Normal'],
             'SUBSURFACE': ['Subsurface Weight', 'Subsurface'],
             'EMISSION': ['Emission Color', 'Emission'],
+            'EMISSION_STRENGTH': ['Emission Strength'],
             'ALPHA': ['Alpha'],
             'TRANSMISSION': ['Transmission Weight', 'Transmission'],
             'SUBSURFACE_RADIUS': ['Subsurface Radius'],
@@ -521,6 +527,7 @@ class smart_bake_textures(bpy.types.Operator):
             'SUBSURFACE_SCALE',
             'TRANSMISSION',
             'ALPHA',
+            'EMISSION_STRENGTH',
             'SHEEN',
             'SHEEN_ROUGHNESS',
             'SHEEN_TINT'
@@ -547,6 +554,24 @@ class smart_bake_textures(bpy.types.Operator):
         output = self._get_output_node(material)
         if not output:
             return None
+
+        def _to_rgba(value):
+            if isinstance(value, float):
+                return (value, value, value, 1.0)
+            try:
+                values = tuple(value)
+            except TypeError:
+                return (0.0, 0.0, 0.0, 1.0)
+
+            if len(values) >= 4:
+                return (values[0], values[1], values[2], values[3])
+            if len(values) == 3:
+                return (values[0], values[1], values[2], 1.0)
+            if len(values) == 2:
+                return (values[0], values[1], 0.0, 1.0)
+            if len(values) == 1:
+                return (values[0], values[0], values[0], 1.0)
+            return (0.0, 0.0, 0.0, 1.0)
 
         if map_type == 'NORMAL':
             return None
@@ -583,16 +608,10 @@ class smart_bake_textures(bpy.types.Operator):
         else:
             stored_default = self._get_stored_default(material, map_type)
             if stored_default is not None:
-                if isinstance(stored_default, float):
-                    emission.inputs['Color'].default_value = (stored_default, stored_default, stored_default, 1.0)
-                else:
-                    emission.inputs['Color'].default_value = stored_default
+                emission.inputs['Color'].default_value = _to_rgba(stored_default)
             else:
                 default_value = source_input.default_value
-                if isinstance(default_value, float):
-                    emission.inputs['Color'].default_value = (default_value, default_value, default_value, 1.0)
-                else:
-                    emission.inputs['Color'].default_value = default_value
+                emission.inputs['Color'].default_value = _to_rgba(default_value)
 
         links.new(emission.outputs['Emission'], output.inputs['Surface'])
         return {
@@ -1025,16 +1044,309 @@ class smart_bake_textures(bpy.types.Operator):
             self._progress_end(context)
 
 
+def _force_map_suffix(map_type):
+    mapping = {
+        'BASECOLOR': 'basecolor',
+        'ROUGHNESS': 'roughness',
+        'METALLIC': 'metallic',
+        'NORMAL': 'normal',
+        'DISPLACEMENT': 'displacement',
+        'SUBSURFACE': 'subsurface',
+        'EMISSION': 'emission',
+        'EMISSION_STRENGTH': 'emission_strength',
+        'ALPHA': 'alpha',
+        'TRANSMISSION': 'transmission',
+        'SUBSURFACE_RADIUS': 'subsurface_radius',
+        'SUBSURFACE_SCALE': 'subsurface_scale',
+        'SHEEN': 'sheen',
+        'SHEEN_ROUGHNESS': 'sheen_roughness',
+        'SHEEN_TINT': 'sheen_tint'
+    }
+    return mapping[map_type]
+
+
+def _force_map_order():
+    return [
+        'BASECOLOR',
+        'ROUGHNESS',
+        'METALLIC',
+        'NORMAL',
+        'DISPLACEMENT',
+        'SUBSURFACE',
+        'SUBSURFACE_RADIUS',
+        'SUBSURFACE_SCALE',
+        'TRANSMISSION',
+        'ALPHA',
+        'EMISSION',
+        'EMISSION_STRENGTH',
+        'SHEEN',
+        'SHEEN_ROUGHNESS',
+        'SHEEN_TINT'
+    ]
+
+
+def _force_principled_input_candidates(map_type):
+    mapping = {
+        'BASECOLOR': ['Base Color'],
+        'ROUGHNESS': ['Roughness'],
+        'METALLIC': ['Metallic'],
+        'NORMAL': ['Normal'],
+        'SUBSURFACE': ['Subsurface Weight', 'Subsurface'],
+        'EMISSION': ['Emission Color', 'Emission'],
+        'EMISSION_STRENGTH': ['Emission Strength'],
+        'ALPHA': ['Alpha'],
+        'TRANSMISSION': ['Transmission Weight', 'Transmission'],
+        'SUBSURFACE_RADIUS': ['Subsurface Radius'],
+        'SUBSURFACE_SCALE': ['Subsurface Scale'],
+        'SHEEN': ['Sheen Weight', 'Sheen'],
+        'SHEEN_ROUGHNESS': ['Sheen Roughness'],
+        'SHEEN_TINT': ['Sheen Tint']
+    }
+    return mapping.get(map_type, [])
+
+
+def _force_get_principled_input_socket(principled, map_type):
+    for input_name in _force_principled_input_candidates(map_type):
+        socket = principled.inputs.get(input_name)
+        if socket is not None:
+            return socket
+    return None
+
+
+def _force_source_reroute_name(map_type):
+    return f"__LEOTOOLS_BAKE_SOURCE_{_force_map_suffix(map_type)}"
+
+
+def _force_get_principled_node(material):
+    if not material.use_nodes or not material.node_tree:
+        return None
+    for node in material.node_tree.nodes:
+        if node.type == 'BSDF_PRINCIPLED':
+            return node
+    return None
+
+
+def _force_get_output_node(material):
+    if not material.use_nodes or not material.node_tree:
+        return None
+    for node in material.node_tree.nodes:
+        if node.type == 'OUTPUT_MATERIAL' and node.is_active_output:
+            return node
+    for node in material.node_tree.nodes:
+        if node.type == 'OUTPUT_MATERIAL':
+            return node
+    return None
+
+
+def _force_target_materials(context):
+    materials = []
+    for obj in context.selected_objects:
+        if obj.type != 'MESH':
+            continue
+        for slot in obj.material_slots:
+            mat = slot.material
+            if mat and mat not in materials and mat.use_nodes and mat.node_tree:
+                materials.append(mat)
+    return materials
+
+
+def _force_find_bake_node(material, map_type):
+    suffix = f"_{_force_map_suffix(map_type)}"
+    for node in material.node_tree.nodes:
+        if node.type != 'TEX_IMAGE':
+            continue
+        if node.name.startswith("BAKE_") and node.name.endswith(suffix):
+            return node
+    return None
+
+
+def _force_connect_original_inputs(material):
+    links = material.node_tree.links
+    principled = _force_get_principled_node(material)
+    if principled is None:
+        return 0
+
+    changed = 0
+    for map_type in _force_map_order():
+        if map_type in {'NORMAL', 'DISPLACEMENT'}:
+            continue
+
+        socket = _force_get_principled_input_socket(principled, map_type)
+        if socket is None:
+            continue
+
+        for link in socket.links[:]:
+            links.remove(link)
+
+        reroute = material.node_tree.nodes.get(_force_source_reroute_name(map_type))
+        if reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links:
+            source_socket = reroute.inputs[0].links[0].from_socket
+            try:
+                links.new(source_socket, socket)
+                changed += 1
+            except RuntimeError:
+                pass
+
+    normal_input = principled.inputs.get('Normal')
+    if normal_input:
+        for link in normal_input.links[:]:
+            links.remove(link)
+
+        normal_reroute = material.node_tree.nodes.get(_force_source_reroute_name('NORMAL'))
+        if normal_reroute and normal_reroute.type == 'REROUTE' and normal_reroute.inputs[0].links:
+            source_socket = normal_reroute.inputs[0].links[0].from_socket
+            try:
+                links.new(source_socket, normal_input)
+                changed += 1
+            except RuntimeError:
+                pass
+
+    output = _force_get_output_node(material)
+    if output and output.inputs.get('Displacement'):
+        for link in output.inputs['Displacement'].links[:]:
+            if link.from_node and link.from_node.name.startswith("BAKE_"):
+                links.remove(link)
+
+    return changed
+
+
+def _force_connect_baked_inputs(material):
+    if not material.use_nodes or not material.node_tree:
+        return 0
+
+    links = material.node_tree.links
+    principled = _force_get_principled_node(material)
+    if principled is None:
+        return 0
+
+    changed = 0
+    for map_type in _force_map_order():
+        bake_node = _force_find_bake_node(material, map_type)
+        if bake_node is None:
+            continue
+
+        bake_node_name = bake_node.name
+
+        if map_type == 'NORMAL':
+            normal_input = principled.inputs.get('Normal')
+            if normal_input is None:
+                continue
+
+            normal_map_name = f"{bake_node_name}_normal_map"
+            normal_map = material.node_tree.nodes.get(normal_map_name)
+            if normal_map is None or normal_map.type != 'NORMAL_MAP':
+                normal_map = material.node_tree.nodes.new(type='ShaderNodeNormalMap')
+                normal_map.name = normal_map_name
+                normal_map.label = normal_map_name
+                normal_map.location = (bake_node.location.x + 220, bake_node.location.y)
+
+            normal_map.space = 'TANGENT'
+            for link in normal_map.inputs['Color'].links[:]:
+                links.remove(link)
+            for link in normal_input.links[:]:
+                links.remove(link)
+            links.new(bake_node.outputs['Color'], normal_map.inputs['Color'])
+            links.new(normal_map.outputs['Normal'], normal_input)
+            changed += 1
+            continue
+
+        if map_type == 'DISPLACEMENT':
+            output = _force_get_output_node(material)
+            if output is None:
+                continue
+
+            displacement_node_name = f"{bake_node_name}_displacement"
+            displacement_node = material.node_tree.nodes.get(displacement_node_name)
+            if displacement_node is None or displacement_node.type != 'DISPLACEMENT':
+                displacement_node = material.node_tree.nodes.new(type='ShaderNodeDisplacement')
+                displacement_node.name = displacement_node_name
+                displacement_node.label = displacement_node_name
+                displacement_node.location = (bake_node.location.x + 220, bake_node.location.y)
+
+            for link in displacement_node.inputs['Height'].links[:]:
+                links.remove(link)
+            for link in output.inputs['Displacement'].links[:]:
+                links.remove(link)
+
+            links.new(bake_node.outputs['Color'], displacement_node.inputs['Height'])
+            links.new(displacement_node.outputs['Displacement'], output.inputs['Displacement'])
+            changed += 1
+            continue
+
+        bsdf_input = _force_get_principled_input_socket(principled, map_type)
+        if bsdf_input is None:
+            continue
+
+        for link in bsdf_input.links[:]:
+            links.remove(link)
+
+        links.new(bake_node.outputs['Color'], bsdf_input)
+        changed += 1
+
+    return changed
+
+
+class force_baked_inputs(bpy.types.Operator):
+    bl_idname = "leo_tools.force_baked_inputs"
+    bl_label = "Force baked inputs"
+    bl_description = "Force selected materials to use baked map inputs"
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        materials = _force_target_materials(context)
+        if not materials:
+            self.report({'ERROR'}, "No mesh material found in current selection")
+            return {'CANCELLED'}
+
+        changed_links = 0
+        for material in materials:
+            changed_links += _force_connect_baked_inputs(material)
+
+        self.report({'INFO'}, f"Forced {len(materials)} material(s) to baked inputs ({changed_links} link changes)")
+        return {'FINISHED'}
+
+
+class force_original_inputs(bpy.types.Operator):
+    bl_idname = "leo_tools.force_original_inputs"
+    bl_label = "Force original inputs"
+    bl_description = "Force selected materials to use original source inputs"
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        materials = _force_target_materials(context)
+        if not materials:
+            self.report({'ERROR'}, "No mesh material found in current selection")
+            return {'CANCELLED'}
+
+        changed_links = 0
+        for material in materials:
+            changed_links += _force_connect_original_inputs(material)
+
+        self.report({'INFO'}, f"Forced {len(materials)} material(s) to original inputs ({changed_links} link changes)")
+        return {'FINISHED'}
+
+
 def register():
-    try:
-        bpy.utils.unregister_class(smart_bake_textures)
-    except RuntimeError:
-        pass
-    bpy.utils.register_class(smart_bake_textures)
+    classes = (smart_bake_textures, force_baked_inputs, force_original_inputs)
+    for cls in classes:
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
+    for cls in classes:
+        bpy.utils.register_class(cls)
 
 
 def unregister():
-    try:
-        bpy.utils.unregister_class(smart_bake_textures)
-    except RuntimeError:
-        pass
+    classes = (force_original_inputs, force_baked_inputs, smart_bake_textures)
+    for cls in classes:
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
