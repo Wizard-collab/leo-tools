@@ -3,6 +3,61 @@ import os
 import tempfile
 
 
+_BAKE_MAP_SUFFIXES = (
+    'basecolor',
+    'roughness',
+    'metallic',
+    'normal',
+    'displacement',
+    'subsurface',
+    'emission',
+    'emission_strength',
+    'alpha',
+    'transmission',
+    'subsurface_radius',
+    'subsurface_scale',
+    'sheen',
+    'sheen_roughness',
+    'sheen_tint'
+)
+
+
+def _collect_existing_bake_names():
+    names = set()
+
+    for material in bpy.data.materials:
+        if not material or not material.use_nodes or not material.node_tree:
+            continue
+
+        for node in material.node_tree.nodes:
+            if node.type != 'TEX_IMAGE':
+                continue
+
+            node_name = node.name
+            if not node_name.startswith("BAKE_"):
+                continue
+
+            encoded_name = node_name[len("BAKE_"):]
+            for suffix in _BAKE_MAP_SUFFIXES:
+                marker = f"_{suffix}"
+                if encoded_name.endswith(marker) and len(encoded_name) > len(marker):
+                    names.add(encoded_name[:-len(marker)])
+                    break
+
+    return sorted(names)
+
+
+def _existing_bake_items(self, context):
+    names = _collect_existing_bake_names()
+    if not names:
+        return [('__NONE__', "<No existing bake found>", "No BAKE_* nodes found in scene materials")]
+
+    items = []
+    for name in names:
+        items.append((name, name, f"Use existing bake set '{name}'"))
+    return items
+
+
 class smart_bake_textures(bpy.types.Operator):
     bl_idname = "leo_tools.smart_bake_textures"
     bl_label = "Bake selected textures"
@@ -32,6 +87,22 @@ class smart_bake_textures(bpy.types.Operator):
         name="Bake Name",
         description="Base name for output images",
         default="Bake"
+    )
+
+    bake_name_mode: bpy.props.EnumProperty(
+        name="Bake Target",
+        description="Create a new bake set or reuse an existing one",
+        items=[
+            ('NEW', "New", "Use a new bake name"),
+            ('EXISTING', "Existing", "Reuse an existing bake name detected in scene")
+        ],
+        default='NEW'
+    )
+
+    existing_bake_name: bpy.props.EnumProperty(
+        name="Existing Bake",
+        description="Existing bake set found in scene shaders",
+        items=_existing_bake_items
     )
 
     resolution: bpy.props.EnumProperty(
@@ -91,11 +162,22 @@ class smart_bake_textures(bpy.types.Operator):
             else:
                 default_dir = os.path.join(tempfile.gettempdir(), "bakes")
             self.output_dir = default_dir
+
+        existing_names = _collect_existing_bake_names()
+        if existing_names and self.existing_bake_name in {'', '__NONE__'}:
+            self.existing_bake_name = existing_names[0]
+
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "bake_name")
+        layout.prop(self, "bake_name_mode")
+        if self.bake_name_mode == 'NEW':
+            layout.prop(self, "bake_name")
+        else:
+            layout.prop(self, "existing_bake_name")
+            if self.existing_bake_name == '__NONE__':
+                layout.label(text="No existing bake set found; switch to New.")
         layout.prop(self, "resolution")
         layout.prop(self, "basecolor_colorspace")
         layout.prop(self, "plug_baked_to_bsdf")
@@ -703,7 +785,9 @@ class smart_bake_textures(bpy.types.Operator):
 
             frame = self._ensure_bake_frame(material)
 
-            for map_type in ordered_selected_map_types:
+            # Always capture original source markers for all supported inputs,
+            # even if a map is not selected in this bake run.
+            for map_type in self._map_order():
                 self._ensure_source_reroute(material, map_type)
             for index, map_type in enumerate(ordered_selected_map_types):
                 self._ensure_bake_node(material, map_type, images_by_type[map_type], index, frame)
@@ -949,6 +1033,12 @@ class smart_bake_textures(bpy.types.Operator):
         self._progress_current = 0
 
     def execute(self, context):
+        if self.bake_name_mode == 'EXISTING':
+            if self.existing_bake_name == '__NONE__':
+                self.report({'ERROR'}, "No existing bake set found. Switch Bake Target to New.")
+                return {'CANCELLED'}
+            self.bake_name = self.existing_bake_name
+
         if not self.map_types:
             self.report({'ERROR'}, "Please select at least one map type")
             return {'CANCELLED'}
@@ -1234,24 +1324,25 @@ def _force_connect_original_inputs(material):
         if socket is None:
             continue
 
+        reroute = material.node_tree.nodes.get(_force_source_reroute_name(map_type))
+        if not (reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links):
+            continue
+
         for link in socket.links[:]:
             links.remove(link)
 
-        reroute = material.node_tree.nodes.get(_force_source_reroute_name(map_type))
-        if reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links:
-            try:
-                links.new(reroute.outputs[0], socket)
-                changed += 1
-            except RuntimeError:
-                pass
+        try:
+            links.new(reroute.outputs[0], socket)
+            changed += 1
+        except RuntimeError:
+            pass
 
     normal_input = principled.inputs.get('Normal')
     if normal_input:
-        for link in normal_input.links[:]:
-            links.remove(link)
-
         normal_reroute = material.node_tree.nodes.get(_force_source_reroute_name('NORMAL'))
         if normal_reroute and normal_reroute.type == 'REROUTE' and normal_reroute.inputs[0].links:
+            for link in normal_input.links[:]:
+                links.remove(link)
             try:
                 links.new(normal_reroute.outputs[0], normal_input)
                 changed += 1
@@ -1260,11 +1351,10 @@ def _force_connect_original_inputs(material):
 
     output = _force_get_output_node(material)
     if output and output.inputs.get('Displacement'):
-        for link in output.inputs['Displacement'].links[:]:
-            links.remove(link)
-
         displacement_reroute = material.node_tree.nodes.get(_force_source_reroute_name('DISPLACEMENT'))
         if displacement_reroute and displacement_reroute.type == 'REROUTE' and displacement_reroute.inputs[0].links:
+            for link in output.inputs['Displacement'].links[:]:
+                links.remove(link)
             try:
                 links.new(displacement_reroute.outputs[0], output.inputs['Displacement'])
                 changed += 1
