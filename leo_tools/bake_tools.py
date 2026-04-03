@@ -81,7 +81,7 @@ class smart_bake_textures(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return any(obj.type == 'MESH' for obj in context.selected_objects)
+        return True
 
     def invoke(self, context, event):
         if not getattr(self, 'output_dir', ''):
