@@ -52,6 +52,10 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.label(text="Animation Tools")
         layout.operator("anim.flip_animation",
                         text="Flip Animation")
+        layout.operator("leo_tools.select_animated_objects",
+                text="Select animated objects")
+        layout.operator("leo_tools.delete_animation_actions",
+                text="Delete animation actions")
         layout.label(text="Shading Tools")
         layout.operator("leo_tools.remove_materials", text="Remove materials")
         layout.operator("leo_tools.create_checker",
@@ -66,10 +70,16 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Add subdivision to selection")
         layout.operator("leo_tools.clean_shapes_names",
                         text="Clean shapes names")
+        layout.operator("leo_tools.replace_dots_in_names",
+                text="Replace . by _ in names")
         layout.operator("leo_tools.add_msh_suffix",
                         text="Add _MSH to meshes")
         layout.operator("leo_tools.remove_all_modifiers",
                         text="Remove all modifiers")
+        layout.operator("leo_tools.remove_collision_modifiers",
+                text="Remove collision modifiers")
+        layout.operator("leo_tools.remove_subdivision_modifiers",
+                text="Remove subdivision modifiers")
         layout.operator("leo_tools.apply_mirror_modifiers",
                 text="Apply mirror modifiers")
         layout.operator("leo_tools.remove_all_vertex_groups",
@@ -296,6 +306,21 @@ class clean_shapes_names(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class replace_dots_in_names(bpy.types.Operator):
+    bl_idname = "leo_tools.replace_dots_in_names"
+    bl_label = "Replace dots in selected object names"
+    bl_description = "Replace all . with _ in selected object names"
+
+    def execute(self, context):
+        renamed_count = 0
+        for obj in context.selected_objects:
+            if '.' in obj.name:
+                obj.name = obj.name.replace('.', '_')
+                renamed_count += 1
+        self.report({'INFO'}, f"Renamed {renamed_count} object(s)")
+        return {'FINISHED'}
+
+
 class add_msh_suffix(bpy.types.Operator):
     bl_idname = "leo_tools.add_msh_suffix"
     bl_label = "Add _MSH suffix to selected meshes"
@@ -324,6 +349,105 @@ class remove_all_modifiers(bpy.types.Operator):
                 obj.modifiers.remove(mod)
                 removed_count += 1
         self.report({'INFO'}, f"Removed {removed_count} modifier(s)")
+        return {'FINISHED'}
+
+
+class remove_collision_modifiers(bpy.types.Operator):
+    bl_idname = "leo_tools.remove_collision_modifiers"
+    bl_label = "Remove Collision modifiers from selected objects"
+    bl_description = "Remove all Collision modifiers from all selected objects"
+
+    def execute(self, context):
+        removed_count = 0
+        for obj in context.selected_objects:
+            for mod in obj.modifiers[:]:
+                if mod.type == 'COLLISION':
+                    obj.modifiers.remove(mod)
+                    removed_count += 1
+        self.report({'INFO'}, f"Removed {removed_count} Collision modifier(s)")
+        return {'FINISHED'}
+
+
+class remove_subdivision_modifiers(bpy.types.Operator):
+    bl_idname = "leo_tools.remove_subdivision_modifiers"
+    bl_label = "Remove Subdivision modifiers from selected objects"
+    bl_description = "Remove all Subdivision Surface modifiers from all selected objects"
+
+    def execute(self, context):
+        removed_count = 0
+        for obj in context.selected_objects:
+            for mod in obj.modifiers[:]:
+                if mod.type == 'SUBSURF':
+                    obj.modifiers.remove(mod)
+                    removed_count += 1
+        self.report({'INFO'}, f"Removed {removed_count} Subdivision modifier(s)")
+        return {'FINISHED'}
+
+
+class select_animated_objects(bpy.types.Operator):
+    bl_idname = "leo_tools.select_animated_objects"
+    bl_label = "Select animated objects"
+    bl_description = "Select all objects in the active scene that have an animation Action"
+
+    def execute(self, context):
+        if context.mode != 'OBJECT':
+            try:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            except RuntimeError:
+                self.report({'ERROR'}, "Switch to Object mode to change selection")
+                return {'CANCELLED'}
+
+        bpy.ops.object.select_all(action='DESELECT')
+
+        animated_objects = []
+        for obj in context.scene.objects:
+            if obj.animation_data and obj.animation_data.action:
+                obj.select_set(True)
+                animated_objects.append(obj)
+
+        if not animated_objects:
+            self.report({'WARNING'}, "No animated object found in the scene")
+            return {'CANCELLED'}
+
+        context.view_layer.objects.active = animated_objects[0]
+        self.report({'INFO'}, f"Selected {len(animated_objects)} animated object(s)")
+        return {'FINISHED'}
+
+
+class delete_animation_actions(bpy.types.Operator):
+    bl_idname = "leo_tools.delete_animation_actions"
+    bl_label = "Delete animation actions"
+    bl_description = "Delete animation Action datablocks from selected objects"
+
+    def execute(self, context):
+        deleted_count = 0
+        unlinked_shared_count = 0
+        touched_objects = 0
+
+        for obj in context.selected_objects:
+            if not obj.animation_data or not obj.animation_data.action:
+                continue
+
+            action = obj.animation_data.action
+            touched_objects += 1
+
+            # Keep shared actions used by other datablocks; only unlink from this object.
+            if action.users > 1:
+                obj.animation_data.action = None
+                unlinked_shared_count += 1
+            else:
+                obj.animation_data.action = None
+                bpy.data.actions.remove(action)
+                deleted_count += 1
+
+        if touched_objects == 0:
+            self.report({'WARNING'}, "No selected object has an animation Action")
+            return {'CANCELLED'}
+
+        self.report(
+            {'INFO'},
+            f"Deleted {deleted_count} action(s), unlinked {unlinked_shared_count} shared action(s)"
+        )
         return {'FINISHED'}
 
 
@@ -1310,10 +1434,20 @@ def register():
         bpy.utils.register_class(add_subdiv)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_clean_shapes_names'):
         bpy.utils.register_class(clean_shapes_names)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_replace_dots_in_names'):
+        bpy.utils.register_class(replace_dots_in_names)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_msh_suffix'):
         bpy.utils.register_class(add_msh_suffix)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
         bpy.utils.register_class(remove_all_modifiers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_collision_modifiers'):
+        bpy.utils.register_class(remove_collision_modifiers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_subdivision_modifiers'):
+        bpy.utils.register_class(remove_subdivision_modifiers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_select_animated_objects'):
+        bpy.utils.register_class(select_animated_objects)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_delete_animation_actions'):
+        bpy.utils.register_class(delete_animation_actions)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_apply_mirror_modifiers'):
         bpy.utils.register_class(apply_mirror_modifiers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
@@ -1382,10 +1516,20 @@ def unregister():
         bpy.utils.unregister_class(add_subdiv)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_clean_shapes_names'):
         bpy.utils.unregister_class(clean_shapes_names)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_replace_dots_in_names'):
+        bpy.utils.unregister_class(replace_dots_in_names)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_add_msh_suffix'):
         bpy.utils.unregister_class(add_msh_suffix)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
         bpy.utils.unregister_class(remove_all_modifiers)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_collision_modifiers'):
+        bpy.utils.unregister_class(remove_collision_modifiers)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_subdivision_modifiers'):
+        bpy.utils.unregister_class(remove_subdivision_modifiers)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_select_animated_objects'):
+        bpy.utils.unregister_class(select_animated_objects)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_delete_animation_actions'):
+        bpy.utils.unregister_class(delete_animation_actions)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_apply_mirror_modifiers'):
         bpy.utils.unregister_class(apply_mirror_modifiers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
