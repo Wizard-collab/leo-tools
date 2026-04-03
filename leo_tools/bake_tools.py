@@ -952,6 +952,8 @@ class smart_bake_textures(bpy.types.Operator):
 
             original_engine = context.scene.render.engine
             original_samples = context.scene.cycles.samples if hasattr(context.scene, 'cycles') else None
+            original_use_denoising = context.scene.cycles.use_denoising if hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_denoising') else None
+            original_use_preview_denoising = context.scene.cycles.use_preview_denoising if hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_preview_denoising') else None
             original_active = context.view_layer.objects.active
             original_selected = list(context.selected_objects)
             temp_bake_object = None
@@ -960,6 +962,10 @@ class smart_bake_textures(bpy.types.Operator):
                 context.scene.render.engine = 'CYCLES'
                 if hasattr(context.scene, 'cycles'):
                     context.scene.cycles.samples = 1
+                    if hasattr(context.scene.cycles, 'use_denoising'):
+                        context.scene.cycles.use_denoising = False
+                    if hasattr(context.scene.cycles, 'use_preview_denoising'):
+                        context.scene.cycles.use_preview_denoising = False
 
                 if len(selected_meshes) > 1:
                     temp_bake_object = self._build_temp_bake_object(context, selected_meshes)
@@ -1020,6 +1026,10 @@ class smart_bake_textures(bpy.types.Operator):
                     context.scene.render.engine = original_engine
                 if original_samples is not None and hasattr(context.scene, 'cycles'):
                     context.scene.cycles.samples = original_samples
+                if original_use_denoising is not None and hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_denoising'):
+                    context.scene.cycles.use_denoising = original_use_denoising
+                if original_use_preview_denoising is not None and hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_preview_denoising'):
+                    context.scene.cycles.use_preview_denoising = original_use_preview_denoising
 
                 bpy.ops.object.select_all(action='DESELECT')
                 for obj in original_selected:
