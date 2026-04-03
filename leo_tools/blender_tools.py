@@ -10,6 +10,7 @@ from leo_tools import combo_shapekey
 from leo_tools import animation_transfer
 from leo_tools import empty_from_vertices
 from leo_tools import collection_display
+from leo_tools import bake_tools
 
 
 class CustomToolboxPanel(bpy.types.Panel):
@@ -27,6 +28,8 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.label(text="Texturing")
         layout.operator("leo_tools.create_udim_mask",
                         text="Create mask with UDIMS")
+        layout.operator("leo_tools.smart_bake_textures",
+                text="Bake selected textures")
         layout.label(text="Rigging Tools")
         layout.operator("leo_tools.mirror_rig_drivers",
                         text="Mirror rig drivers")
@@ -284,6 +287,7 @@ class create_udim_mask(bpy.types.Operator):
     def execute(self, context):
         bpy.ops.object.create_udim_map('INVOKE_DEFAULT')
         return {'FINISHED'}
+
 
 
 class add_subdiv(bpy.types.Operator):
@@ -1408,6 +1412,9 @@ def register():
     
     # Register collection display tools
     collection_display.register()
+
+    # Register bake tools
+    bake_tools.register()
     
     # Register our operators (only if not already registered)
     if not hasattr(bpy.types, 'ANIM_OT_reset_tween_stored_pose'):
@@ -1553,6 +1560,9 @@ def unregister():
     
     # Unregister collection display tools
     collection_display.unregister()
+
+    # Unregister bake tools
+    bake_tools.unregister()
     
     # Unregister shape key operators (only if registered)
     if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
