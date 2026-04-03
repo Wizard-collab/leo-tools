@@ -412,6 +412,8 @@ class smart_bake_textures(bpy.types.Operator):
             return True
         if node_name.startswith("__LEOTOOLS_BAKE_TMP_"):
             return True
+        if node_name.startswith("__LEOTOOLS_BAKE_SOURCE_"):
+            return True
         if node_name.startswith("__LEOTOOLS_BAKE_FALLBACK_"):
             return True
         return False
@@ -1237,9 +1239,8 @@ def _force_connect_original_inputs(material):
 
         reroute = material.node_tree.nodes.get(_force_source_reroute_name(map_type))
         if reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links:
-            source_socket = reroute.inputs[0].links[0].from_socket
             try:
-                links.new(source_socket, socket)
+                links.new(reroute.outputs[0], socket)
                 changed += 1
             except RuntimeError:
                 pass
@@ -1251,9 +1252,8 @@ def _force_connect_original_inputs(material):
 
         normal_reroute = material.node_tree.nodes.get(_force_source_reroute_name('NORMAL'))
         if normal_reroute and normal_reroute.type == 'REROUTE' and normal_reroute.inputs[0].links:
-            source_socket = normal_reroute.inputs[0].links[0].from_socket
             try:
-                links.new(source_socket, normal_input)
+                links.new(normal_reroute.outputs[0], normal_input)
                 changed += 1
             except RuntimeError:
                 pass
@@ -1265,9 +1265,8 @@ def _force_connect_original_inputs(material):
 
         displacement_reroute = material.node_tree.nodes.get(_force_source_reroute_name('DISPLACEMENT'))
         if displacement_reroute and displacement_reroute.type == 'REROUTE' and displacement_reroute.inputs[0].links:
-            source_socket = displacement_reroute.inputs[0].links[0].from_socket
             try:
-                links.new(source_socket, output.inputs['Displacement'])
+                links.new(displacement_reroute.outputs[0], output.inputs['Displacement'])
                 changed += 1
             except RuntimeError:
                 pass
