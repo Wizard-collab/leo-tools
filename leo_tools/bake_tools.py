@@ -158,7 +158,8 @@ class smart_bake_textures(bpy.types.Operator):
         if not getattr(self, 'output_dir', ''):
             blend_path = bpy.data.filepath
             if blend_path:
-                default_dir = os.path.join(os.path.dirname(blend_path), "bakes")
+                default_dir = os.path.join(
+                    os.path.dirname(blend_path), "bakes")
             else:
                 default_dir = os.path.join(tempfile.gettempdir(), "bakes")
             self.output_dir = default_dir
@@ -429,7 +430,8 @@ class smart_bake_textures(bpy.types.Operator):
         if not candidate_nodes:
             return (350.0, 180.0)
 
-        max_x = max(node.location.x + getattr(node, 'width', 180.0) for node in candidate_nodes)
+        max_x = max(node.location.x + getattr(node, 'width', 180.0)
+                    for node in candidate_nodes)
         max_y = max(node.location.y for node in candidate_nodes)
         return (max_x + 260.0, max_y + 40.0)
 
@@ -445,7 +447,8 @@ class smart_bake_textures(bpy.types.Operator):
             created = True
 
         if created:
-            frame.location = self._graph_anchor_for_bake_frame(node_tree, frame)
+            frame.location = self._graph_anchor_for_bake_frame(
+                node_tree, frame)
             frame.width = 520
         return frame
 
@@ -512,7 +515,8 @@ class smart_bake_textures(bpy.types.Operator):
 
         is_scalar = isinstance(stored_default, float)
         if fallback is None:
-            fallback = node_tree.nodes.new(type='ShaderNodeValue' if is_scalar else 'ShaderNodeRGB')
+            fallback = node_tree.nodes.new(
+                type='ShaderNodeValue' if is_scalar else 'ShaderNodeRGB')
             fallback.name = node_name
             fallback.label = node_name
 
@@ -557,7 +561,8 @@ class smart_bake_textures(bpy.types.Operator):
             if principled is None:
                 return
 
-            input_socket = self._get_principled_input_socket(principled, map_type)
+            input_socket = self._get_principled_input_socket(
+                principled, map_type)
             if input_socket is None:
                 return
             location_anchor = principled
@@ -584,7 +589,8 @@ class smart_bake_textures(bpy.types.Operator):
                 map_index = self._map_order().index(map_type)
             except ValueError:
                 map_index = 0
-            reroute.location = (location_anchor.location.x - 260, location_anchor.location.y - (map_index * 20))
+            reroute.location = (location_anchor.location.x - 260,
+                                location_anchor.location.y - (map_index * 20))
 
         for link in reroute.inputs[0].links[:]:
             if link.from_socket == source_socket:
@@ -592,7 +598,28 @@ class smart_bake_textures(bpy.types.Operator):
             node_tree.links.remove(link)
 
         try:
-            node_tree.links.new(source_socket, reroute.inputs[0])
+            # For NORMAL map type, add a normalize vector node before the reroute
+            if map_type == 'NORMAL':
+                normalize_node_name = "__LEOTOOLS_BAKE_NORMALIZE_NORMAL"
+                normalize_node = node_tree.nodes.get(normalize_node_name)
+
+                if normalize_node is None or normalize_node.type != 'VECT_MATH':
+                    normalize_node = node_tree.nodes.new(
+                        type='ShaderNodeVectorMath')
+                    normalize_node.name = normalize_node_name
+                    normalize_node.label = "Normalize Normal"
+                    normalize_node.operation = 'NORMALIZE'
+                    # Position it between the source and the reroute
+                    normalize_node.location = (
+                        reroute.location.x - 200, reroute.location.y)
+
+                # Connect: source -> normalize -> reroute
+                node_tree.links.new(source_socket, normalize_node.inputs[0])
+                node_tree.links.new(
+                    normalize_node.outputs[0], reroute.inputs[0])
+            else:
+                # For other map types, connect directly
+                node_tree.links.new(source_socket, reroute.inputs[0])
         except RuntimeError:
             pass
 
@@ -700,7 +727,8 @@ class smart_bake_textures(bpy.types.Operator):
                             source_socket = height_input.links[0].from_socket
                         else:
                             try:
-                                default_value = float(height_input.default_value)
+                                default_value = float(
+                                    height_input.default_value)
                             except (TypeError, ValueError):
                                 default_value = 0.0
                 else:
@@ -711,7 +739,8 @@ class smart_bake_textures(bpy.types.Operator):
             else:
                 if default_value is None:
                     default_value = 0.0
-                emission.inputs['Color'].default_value = _to_rgba(default_value)
+                emission.inputs['Color'].default_value = _to_rgba(
+                    default_value)
 
             links.new(emission.outputs['Emission'], output.inputs['Surface'])
             return {
@@ -723,7 +752,8 @@ class smart_bake_textures(bpy.types.Operator):
             if principled is None:
                 node_tree.nodes.remove(emission)
                 return None
-            source_input = self._get_principled_input_socket(principled, map_type)
+            source_input = self._get_principled_input_socket(
+                principled, map_type)
 
         if source_input is None:
             node_tree.nodes.remove(emission)
@@ -733,7 +763,8 @@ class smart_bake_textures(bpy.types.Operator):
         if marked_source is not None:
             links.new(marked_source, emission.inputs['Color'])
         elif source_input.links:
-            links.new(source_input.links[0].from_socket, emission.inputs['Color'])
+            links.new(source_input.links[0].from_socket,
+                      emission.inputs['Color'])
         else:
             default_value = source_input.default_value
             emission.inputs['Color'].default_value = _to_rgba(default_value)
@@ -772,7 +803,8 @@ class smart_bake_textures(bpy.types.Operator):
             node_tree.nodes.remove(emission)
 
     def _prepare_material_nodes(self, materials, images_by_type):
-        ordered_selected_map_types = [map_type for map_type in self._map_order() if map_type in images_by_type]
+        ordered_selected_map_types = [
+            map_type for map_type in self._map_order() if map_type in images_by_type]
         for material in materials:
             if not material.use_nodes or not material.node_tree:
                 continue
@@ -790,7 +822,8 @@ class smart_bake_textures(bpy.types.Operator):
             for map_type in self._map_order():
                 self._ensure_source_reroute(material, map_type)
             for index, map_type in enumerate(ordered_selected_map_types):
-                self._ensure_bake_node(material, map_type, images_by_type[map_type], index, frame)
+                self._ensure_bake_node(
+                    material, map_type, images_by_type[map_type], index, frame)
 
     def _activate_map_nodes(self, materials, map_type):
         node_name = f"BAKE_{self.bake_name}_{self._map_suffix(map_type)}"
@@ -809,9 +842,11 @@ class smart_bake_textures(bpy.types.Operator):
         basecolor_space = getattr(self, 'basecolor_colorspace', 'ACESCG')
         if map_type in {'BASECOLOR', 'EMISSION'}:
             if basecolor_space == 'RAW':
-                preferred = ['Non-Color', 'Utility - Raw', 'Raw', 'Role - data', 'role_data']
+                preferred = ['Non-Color', 'Utility - Raw',
+                             'Raw', 'Role - data', 'role_data']
             elif basecolor_space == 'SRGB':
-                preferred = ['sRGB', 'Utility - sRGB - Texture', 'Input - Generic - sRGB - Texture', 'srgb_texture']
+                preferred = ['sRGB', 'Utility - sRGB - Texture',
+                             'Input - Generic - sRGB - Texture', 'srgb_texture']
             else:
                 preferred = ['acescg', 'ACES - ACEScg']
 
@@ -872,10 +907,12 @@ class smart_bake_textures(bpy.types.Operator):
                     normal_map_node_name = f"{bake_node_name}_normal_map"
                     normal_map = node_tree.nodes.get(normal_map_node_name)
                     if normal_map is None or normal_map.type != 'NORMAL_MAP':
-                        normal_map = node_tree.nodes.new(type='ShaderNodeNormalMap')
+                        normal_map = node_tree.nodes.new(
+                            type='ShaderNodeNormalMap')
                         normal_map.name = normal_map_node_name
                         normal_map.label = normal_map_node_name
-                        normal_map.location = (bake_node.location.x + 220, bake_node.location.y)
+                        normal_map.location = (
+                            bake_node.location.x + 220, bake_node.location.y)
 
                     normal_map.space = 'TANGENT'
 
@@ -884,7 +921,8 @@ class smart_bake_textures(bpy.types.Operator):
                     for link in normal_input.links[:]:
                         links.remove(link)
 
-                    links.new(bake_node.outputs['Color'], normal_map.inputs['Color'])
+                    links.new(bake_node.outputs['Color'],
+                              normal_map.inputs['Color'])
                     links.new(normal_map.outputs['Normal'], normal_input)
                     continue
 
@@ -894,23 +932,29 @@ class smart_bake_textures(bpy.types.Operator):
                         continue
 
                     displacement_node_name = f"{bake_node_name}_displacement"
-                    displacement_node = node_tree.nodes.get(displacement_node_name)
+                    displacement_node = node_tree.nodes.get(
+                        displacement_node_name)
                     if displacement_node is None or displacement_node.type != 'DISPLACEMENT':
-                        displacement_node = node_tree.nodes.new(type='ShaderNodeDisplacement')
+                        displacement_node = node_tree.nodes.new(
+                            type='ShaderNodeDisplacement')
                         displacement_node.name = displacement_node_name
                         displacement_node.label = displacement_node_name
-                        displacement_node.location = (bake_node.location.x + 220, bake_node.location.y)
+                        displacement_node.location = (
+                            bake_node.location.x + 220, bake_node.location.y)
 
                     for link in displacement_node.inputs['Height'].links[:]:
                         links.remove(link)
                     for link in output.inputs['Displacement'].links[:]:
                         links.remove(link)
 
-                    links.new(bake_node.outputs['Color'], displacement_node.inputs['Height'])
-                    links.new(displacement_node.outputs['Displacement'], output.inputs['Displacement'])
+                    links.new(bake_node.outputs['Color'],
+                              displacement_node.inputs['Height'])
+                    links.new(
+                        displacement_node.outputs['Displacement'], output.inputs['Displacement'])
                     continue
 
-                bsdf_input = self._get_principled_input_socket(principled, map_type)
+                bsdf_input = self._get_principled_input_socket(
+                    principled, map_type)
                 if bsdf_input is None:
                     continue
 
@@ -989,7 +1033,8 @@ class smart_bake_textures(bpy.types.Operator):
                 pass
 
         dupe_names = [obj.name for obj in dupes]
-        dupes = [obj for obj in bpy.data.objects if obj.name in dupe_names and obj.type == 'MESH']
+        dupes = [
+            obj for obj in bpy.data.objects if obj.name in dupe_names and obj.type == 'MESH']
         if not dupes:
             return None
 
@@ -1024,7 +1069,8 @@ class smart_bake_textures(bpy.types.Operator):
         context.window_manager.progress_begin(0, self._progress_total)
 
     def _progress_step(self, context):
-        self._progress_current = min(self._progress_current + 1, self._progress_total)
+        self._progress_current = min(
+            self._progress_current + 1, self._progress_total)
         context.window_manager.progress_update(self._progress_current)
 
     def _progress_end(self, context):
@@ -1035,7 +1081,8 @@ class smart_bake_textures(bpy.types.Operator):
     def execute(self, context):
         if self.bake_name_mode == 'EXISTING':
             if self.existing_bake_name == '__NONE__':
-                self.report({'ERROR'}, "No existing bake set found. Switch Bake Target to New.")
+                self.report(
+                    {'ERROR'}, "No existing bake set found. Switch Bake Target to New.")
                 return {'CANCELLED'}
             self.bake_name = self.existing_bake_name
 
@@ -1070,7 +1117,8 @@ class smart_bake_textures(bpy.types.Operator):
             return {'CANCELLED'}
 
         requested_map_types = self._expanded_map_types()
-        ordered_requested_map_types = [m for m in self._map_order() if m in requested_map_types]
+        ordered_requested_map_types = [
+            m for m in self._map_order() if m in requested_map_types]
 
         total_progress_steps = (2 * len(ordered_requested_map_types)) + 4
         self._progress_begin(context, total_progress_steps)
@@ -1079,9 +1127,11 @@ class smart_bake_textures(bpy.types.Operator):
             images_by_type = {}
             for map_type in ordered_requested_map_types:
                 image_name = f"{self.bake_name}_{self._map_suffix(map_type)}"
-                image = self._ensure_udim_image(context, image_name, resolution, udims)
+                image = self._ensure_udim_image(
+                    context, image_name, resolution, udims)
                 if image is None:
-                    self.report({'ERROR'}, f"Could not create or load image: {image_name}")
+                    self.report(
+                        {'ERROR'}, f"Could not create or load image: {image_name}")
                     return {'CANCELLED'}
                 self._configure_image_colorspace(image, map_type)
                 images_by_type[map_type] = image
@@ -1090,9 +1140,12 @@ class smart_bake_textures(bpy.types.Operator):
             self._prepare_material_nodes(materials, images_by_type)
 
             original_engine = context.scene.render.engine
-            original_samples = context.scene.cycles.samples if hasattr(context.scene, 'cycles') else None
-            original_use_denoising = context.scene.cycles.use_denoising if hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_denoising') else None
-            original_use_preview_denoising = context.scene.cycles.use_preview_denoising if hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_preview_denoising') else None
+            original_samples = context.scene.cycles.samples if hasattr(
+                context.scene, 'cycles') else None
+            original_use_denoising = context.scene.cycles.use_denoising if hasattr(
+                context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_denoising') else None
+            original_use_preview_denoising = context.scene.cycles.use_preview_denoising if hasattr(
+                context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_preview_denoising') else None
             original_active = context.view_layer.objects.active
             original_selected = list(context.selected_objects)
             temp_bake_object = None
@@ -1107,10 +1160,12 @@ class smart_bake_textures(bpy.types.Operator):
                         context.scene.cycles.use_preview_denoising = False
 
                 if len(selected_meshes) > 1:
-                    temp_bake_object = self._build_temp_bake_object(context, selected_meshes)
+                    temp_bake_object = self._build_temp_bake_object(
+                        context, selected_meshes)
                 self._progress_step(context)
 
-                bake_targets = [temp_bake_object] if temp_bake_object else selected_meshes
+                bake_targets = [
+                    temp_bake_object] if temp_bake_object else selected_meshes
 
                 bpy.ops.object.select_all(action='DESELECT')
                 for obj in bake_targets:
@@ -1119,7 +1174,8 @@ class smart_bake_textures(bpy.types.Operator):
                 if bake_targets and bake_targets[0] and bake_targets[0].name in bpy.data.objects:
                     context.view_layer.objects.active = bake_targets[0]
                 else:
-                    self.report({'ERROR'}, "No valid object available for baking")
+                    self.report(
+                        {'ERROR'}, "No valid object available for baking")
                     return {'CANCELLED'}
 
                 for map_type in ordered_requested_map_types:
@@ -1137,12 +1193,14 @@ class smart_bake_textures(bpy.types.Operator):
                         for material in materials:
                             if not material.use_nodes or not material.node_tree:
                                 continue
-                            override_data = self._setup_emission_override(material, map_type)
+                            override_data = self._setup_emission_override(
+                                material, map_type)
                             if override_data:
                                 overrides.append(override_data)
 
                         if not overrides:
-                            self.report({'WARNING'}, f"Skipped {self._map_suffix(map_type)}: no valid Principled setup found")
+                            self.report(
+                                {'WARNING'}, f"Skipped {self._map_suffix(map_type)}: no valid Principled setup found")
                             self._progress_step(context)
                             continue
 
@@ -1179,15 +1237,18 @@ class smart_bake_textures(bpy.types.Operator):
 
             save_dir, failed_saves = self._save_baked_images(images_by_type)
             if failed_saves:
-                self.report({'WARNING'}, f"Some images could not be saved: {', '.join(failed_saves)}")
+                self.report(
+                    {'WARNING'}, f"Some images could not be saved: {', '.join(failed_saves)}")
             self._progress_step(context)
 
             if getattr(self, 'plug_baked_to_bsdf', False):
                 self._connect_baked_maps_to_bsdf(materials, images_by_type)
             self._progress_step(context)
 
-            baked_list = ", ".join([self._map_suffix(m) for m in self._map_order() if m in images_by_type])
-            self.report({'INFO'}, f"Bake complete: {baked_list} | Saved to: {save_dir}")
+            baked_list = ", ".join(
+                [self._map_suffix(m) for m in self._map_order() if m in images_by_type])
+            self.report(
+                {'INFO'}, f"Bake complete: {baked_list} | Saved to: {save_dir}")
             return {'FINISHED'}
         finally:
             self._progress_end(context)
@@ -1324,7 +1385,8 @@ def _force_connect_original_inputs(material):
         if socket is None:
             continue
 
-        reroute = material.node_tree.nodes.get(_force_source_reroute_name(map_type))
+        reroute = material.node_tree.nodes.get(
+            _force_source_reroute_name(map_type))
         if not (reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links):
             continue
 
@@ -1339,11 +1401,14 @@ def _force_connect_original_inputs(material):
 
     normal_input = principled.inputs.get('Normal')
     if normal_input:
-        normal_reroute = material.node_tree.nodes.get(_force_source_reroute_name('NORMAL'))
+        normal_reroute = material.node_tree.nodes.get(
+            _force_source_reroute_name('NORMAL'))
         if normal_reroute and normal_reroute.type == 'REROUTE' and normal_reroute.inputs[0].links:
             for link in normal_input.links[:]:
                 links.remove(link)
             try:
+                # Always connect to the reroute output
+                # The reroute has the normalize node feeding into it
                 links.new(normal_reroute.outputs[0], normal_input)
                 changed += 1
             except RuntimeError:
@@ -1351,12 +1416,14 @@ def _force_connect_original_inputs(material):
 
     output = _force_get_output_node(material)
     if output and output.inputs.get('Displacement'):
-        displacement_reroute = material.node_tree.nodes.get(_force_source_reroute_name('DISPLACEMENT'))
+        displacement_reroute = material.node_tree.nodes.get(
+            _force_source_reroute_name('DISPLACEMENT'))
         if displacement_reroute and displacement_reroute.type == 'REROUTE' and displacement_reroute.inputs[0].links:
             for link in output.inputs['Displacement'].links[:]:
                 links.remove(link)
             try:
-                links.new(displacement_reroute.outputs[0], output.inputs['Displacement'])
+                links.new(
+                    displacement_reroute.outputs[0], output.inputs['Displacement'])
                 changed += 1
             except RuntimeError:
                 pass
@@ -1389,10 +1456,12 @@ def _force_connect_baked_inputs(material):
             normal_map_name = f"{bake_node_name}_normal_map"
             normal_map = material.node_tree.nodes.get(normal_map_name)
             if normal_map is None or normal_map.type != 'NORMAL_MAP':
-                normal_map = material.node_tree.nodes.new(type='ShaderNodeNormalMap')
+                normal_map = material.node_tree.nodes.new(
+                    type='ShaderNodeNormalMap')
                 normal_map.name = normal_map_name
                 normal_map.label = normal_map_name
-                normal_map.location = (bake_node.location.x + 220, bake_node.location.y)
+                normal_map.location = (
+                    bake_node.location.x + 220, bake_node.location.y)
 
             normal_map.space = 'TANGENT'
             for link in normal_map.inputs['Color'].links[:]:
@@ -1410,20 +1479,25 @@ def _force_connect_baked_inputs(material):
                 continue
 
             displacement_node_name = f"{bake_node_name}_displacement"
-            displacement_node = material.node_tree.nodes.get(displacement_node_name)
+            displacement_node = material.node_tree.nodes.get(
+                displacement_node_name)
             if displacement_node is None or displacement_node.type != 'DISPLACEMENT':
-                displacement_node = material.node_tree.nodes.new(type='ShaderNodeDisplacement')
+                displacement_node = material.node_tree.nodes.new(
+                    type='ShaderNodeDisplacement')
                 displacement_node.name = displacement_node_name
                 displacement_node.label = displacement_node_name
-                displacement_node.location = (bake_node.location.x + 220, bake_node.location.y)
+                displacement_node.location = (
+                    bake_node.location.x + 220, bake_node.location.y)
 
             for link in displacement_node.inputs['Height'].links[:]:
                 links.remove(link)
             for link in output.inputs['Displacement'].links[:]:
                 links.remove(link)
 
-            links.new(bake_node.outputs['Color'], displacement_node.inputs['Height'])
-            links.new(displacement_node.outputs['Displacement'], output.inputs['Displacement'])
+            links.new(bake_node.outputs['Color'],
+                      displacement_node.inputs['Height'])
+            links.new(
+                displacement_node.outputs['Displacement'], output.inputs['Displacement'])
             changed += 1
             continue
 
@@ -1452,14 +1526,16 @@ class force_baked_inputs(bpy.types.Operator):
     def execute(self, context):
         materials = _force_target_materials(context)
         if not materials:
-            self.report({'ERROR'}, "No mesh material found in current selection")
+            self.report(
+                {'ERROR'}, "No mesh material found in current selection")
             return {'CANCELLED'}
 
         changed_links = 0
         for material in materials:
             changed_links += _force_connect_baked_inputs(material)
 
-        self.report({'INFO'}, f"Forced {len(materials)} material(s) to baked inputs ({changed_links} link changes)")
+        self.report(
+            {'INFO'}, f"Forced {len(materials)} material(s) to baked inputs ({changed_links} link changes)")
         return {'FINISHED'}
 
 
@@ -1475,14 +1551,16 @@ class force_original_inputs(bpy.types.Operator):
     def execute(self, context):
         materials = _force_target_materials(context)
         if not materials:
-            self.report({'ERROR'}, "No mesh material found in current selection")
+            self.report(
+                {'ERROR'}, "No mesh material found in current selection")
             return {'CANCELLED'}
 
         changed_links = 0
         for material in materials:
             changed_links += _force_connect_original_inputs(material)
 
-        self.report({'INFO'}, f"Forced {len(materials)} material(s) to original inputs ({changed_links} link changes)")
+        self.report(
+            {'INFO'}, f"Forced {len(materials)} material(s) to original inputs ({changed_links} link changes)")
         return {'FINISHED'}
 
 
