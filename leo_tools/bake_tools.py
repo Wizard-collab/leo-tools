@@ -396,6 +396,30 @@ class smart_bake_textures(bpy.types.Operator):
                 return socket
         return None
 
+    def _has_any_material_input(self, materials, map_type):
+        """Check if any material has a meaningful input for the given map type"""
+        for material in materials:
+            if not material.use_nodes or not material.node_tree:
+                continue
+
+            if map_type == 'DISPLACEMENT':
+                output = self._get_output_node(material)
+                if output is None:
+                    continue
+                displacement_socket = output.inputs.get('Displacement')
+                if displacement_socket and displacement_socket.links:
+                    return True
+            else:
+                principled = self._get_principled_node(material)
+                if principled is None:
+                    continue
+                
+                input_socket = self._get_principled_input_socket(principled, map_type)
+                if input_socket and input_socket.links:
+                    return True
+        
+        return False
+
     def _source_reroute_name(self, map_type):
         return f"__LEOTOOLS_BAKE_SOURCE_{self._map_suffix(map_type)}"
 
@@ -1119,6 +1143,29 @@ class smart_bake_textures(bpy.types.Operator):
         requested_map_types = self._expanded_map_types()
         ordered_requested_map_types = [
             m for m in self._map_order() if m in requested_map_types]
+
+        # Filter out map types that have no inputs in any material
+        filtered_map_types = []
+        skipped_map_types = []
+        for map_type in ordered_requested_map_types:
+            if self._has_any_material_input(materials, map_type):
+                filtered_map_types.append(map_type)
+            else:
+                skipped_map_types.append(self._map_suffix(map_type))
+        
+        # Inform user about skipped channels
+        if skipped_map_types:
+            self.report(
+                {'INFO'}, 
+                f"Skipped baking (no inputs found): {', '.join(skipped_map_types)}"
+            )
+        
+        # Use filtered list for baking
+        ordered_requested_map_types = filtered_map_types
+        
+        if not ordered_requested_map_types:
+            self.report({'WARNING'}, "No map types have inputs to bake")
+            return {'CANCELLED'}
 
         total_progress_steps = (2 * len(ordered_requested_map_types)) + 4
         self._progress_begin(context, total_progress_steps)
