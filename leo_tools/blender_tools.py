@@ -13,6 +13,42 @@ from leo_tools import collection_display
 from leo_tools import bake_tools
 
 
+def get_action_fcurves(action, id_data=None):
+    """Return the F-Curves of an action, compatible with both the legacy
+    Action API (action.fcurves, Blender < 5.0) and the layered/slotted
+    Action system (channelbags), which fully replaced it in Blender 5.0."""
+    if action is None:
+        return []
+
+    # Legacy API - still present on Blender versions before 5.0
+    if hasattr(action, "fcurves"):
+        return list(action.fcurves)
+
+    # Blender 5.0+: action.fcurves was removed, fcurves now live on
+    # per-slot channelbags (bpy_extras.anim_utils helpers)
+    try:
+        from bpy_extras import anim_utils
+    except ImportError:
+        return []
+
+    action_slot = None
+    if id_data is not None and getattr(id_data, "animation_data", None):
+        action_slot = id_data.animation_data.action_slot
+
+    if action_slot is not None:
+        channelbag = anim_utils.action_get_channelbag_for_slot(action, action_slot)
+        return list(channelbag.fcurves) if channelbag else []
+
+    # No specific slot known - gather fcurves from every channelbag
+    fcurves = []
+    for layer in action.layers:
+        for strip in layer.strips:
+            if strip.type == 'KEYFRAME':
+                for channelbag in strip.channelbags:
+                    fcurves.extend(channelbag.fcurves)
+    return fcurves
+
+
 class CustomToolboxPanel(bpy.types.Panel):
     bl_label = "Leo tools"  # The name of the panel
     bl_idname = "VIEW3D_PT_leo_tools"  # Unique ID for the panel
@@ -250,7 +286,7 @@ class convert_rig_interpolation(bpy.types.Operator):
         bezier_count = 0
         total_keys = 0
         
-        for fcurve in action.fcurves:
+        for fcurve in get_action_fcurves(action, obj):
             for keyframe in fcurve.keyframe_points:
                 total_keys += 1
                 if keyframe.interpolation == 'CONSTANT':
@@ -272,7 +308,7 @@ class convert_rig_interpolation(bpy.types.Operator):
         
         # Convert all keyframes
         converted = 0
-        for fcurve in action.fcurves:
+        for fcurve in get_action_fcurves(action, obj):
             for keyframe in fcurve.keyframe_points:
                 if keyframe.interpolation != target_interpolation:
                     keyframe.interpolation = target_interpolation
@@ -1336,7 +1372,7 @@ def update_tween(self, context):
 
                 # Find fcurves for this bone's property
                 bone_fcurves = [
-                    fc for fc in action.fcurves if fc.data_path == data_path]
+                    fc for fc in get_action_fcurves(action, armature) if fc.data_path == data_path]
                 if not bone_fcurves:
                     continue
 
@@ -1413,7 +1449,7 @@ def update_tween(self, context):
             # Process location, rotation, and scale for each object
             for data_path in ["location", "rotation_euler", "rotation_quaternion", "scale"]:
                 obj_fcurves = [
-                    fc for fc in action.fcurves if fc.data_path == data_path]
+                    fc for fc in get_action_fcurves(action, obj) if fc.data_path == data_path]
                 if not obj_fcurves:
                     continue
 
