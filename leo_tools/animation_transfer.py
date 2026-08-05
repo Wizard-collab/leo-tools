@@ -5,6 +5,32 @@ from bpy.props import StringProperty, IntProperty, BoolProperty
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 
+def get_action_fcurves(action, armature=None):
+    """Get fcurves from an action, supporting both legacy actions
+    and the new layered/slotted action system (Blender 4.4+)."""
+    if hasattr(action, "fcurves"):
+        return list(action.fcurves)
+
+    fcurves = []
+
+    if hasattr(action, "layers"):
+        target_slot = None
+        if (armature is not None
+                and armature.animation_data is not None
+                and getattr(armature.animation_data, "action_slot", None) is not None):
+            target_slot = armature.animation_data.action_slot
+
+        for layer in action.layers:
+            for strip in layer.strips:
+                if hasattr(strip, "channelbags"):
+                    for channelbag in strip.channelbags:
+                        if target_slot is not None and channelbag.slot_handle != target_slot.handle:
+                            continue
+                        fcurves.extend(channelbag.fcurves)
+
+    return fcurves
+
+
 # EXPORT OPERATOR
 class ANIM_OT_export_rotation_data(Operator, ExportHelper):
     """Export rotation animation data from armature"""
@@ -51,7 +77,7 @@ class ANIM_OT_export_rotation_data(Operator, ExportHelper):
         min_frame = float('inf')
         max_frame = float('-inf')
         
-        for fcurve in action.fcurves:
+        for fcurve in get_action_fcurves(action, armature):
             if fcurve.data_path.startswith("pose.bones["):
                 bone_name = fcurve.data_path.split('"')[1]
                 if any(prop in fcurve.data_path for prop in ["location", "rotation", "scale"]):

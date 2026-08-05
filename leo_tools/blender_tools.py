@@ -1313,7 +1313,7 @@ def update_tween(self, context):
 
         action = armature.animation_data.action
         selected_bones = [
-            bone for bone in armature.pose.bones if bone.bone.select]
+            bone for bone in armature.pose.bones if bone.select]
         
         # Store initial pose if not already stored
         if not stored_data:
@@ -1509,7 +1509,7 @@ def align_object_to_bone():
         selected_objects.remove(armature)
         object_to_align = selected_objects[0]
         selected_bones = [
-            bone for bone in armature.pose.bones if bone.bone.select]
+            bone for bone in armature.pose.bones if bone.select]
 
         if selected_bones:
             # Get the first selected bone (if multiple are selected, it uses the first one)
@@ -1538,7 +1538,7 @@ def align_bn_to_bn():
         armature = bpy.context.object
         active_pose_bone = armature.pose.bones[armature.data.bones.active.name]
         selected_bones = [
-            bone for bone in armature.pose.bones if bone.bone.select]
+            bone for bone in armature.pose.bones if bone.select]
         selected_bones.remove(
             bpy.data.objects[armature.name].pose.bones[active_pose_bone.name])
 
@@ -1554,9 +1554,11 @@ def align_bn_to_bn():
     else:
         armature = bpy.context.object
         active_bone = armature.data.bones[armature.data.bones.active.name]
-        selected_bones = [bone for bone in armature.data.bones if bone.select]
-        selected_bones.remove(
-            bpy.data.objects[armature.name].data.bones[active_bone.name])
+        selected_bones = [
+            armature.data.bones[pose_bone.name]
+            for pose_bone in armature.pose.bones if pose_bone.select]
+        if active_bone in selected_bones:
+            selected_bones.remove(active_bone)
 
         if selected_bones:
             # Get the first selected bone (if multiple are selected, it uses the first one)
