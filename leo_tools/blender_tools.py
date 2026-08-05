@@ -1350,7 +1350,14 @@ def update_tween(self, context):
         action = armature.animation_data.action
         selected_bones = [
             bone for bone in armature.pose.bones if bone.select]
-        
+
+        # Gather and index all fcurves once instead of re-scanning them
+        # for every bone/property combination (this was the main cause of
+        # lag, especially with the Blender 5.0 channelbag-based lookup).
+        fcurves_by_path = {}
+        for fc in get_action_fcurves(action, armature):
+            fcurves_by_path.setdefault(fc.data_path, []).append(fc)
+
         # Store initial pose if not already stored
         if not stored_data:
             stored_data = {"armature": armature.name, "bones": {}}
@@ -1371,8 +1378,7 @@ def update_tween(self, context):
                 data_path = f'pose.bones["{bone_name}"].{data_path_base}'
 
                 # Find fcurves for this bone's property
-                bone_fcurves = [
-                    fc for fc in get_action_fcurves(action, armature) if fc.data_path == data_path]
+                bone_fcurves = fcurves_by_path.get(data_path)
                 if not bone_fcurves:
                     continue
 
@@ -1446,10 +1452,15 @@ def update_tween(self, context):
 
             action = obj.animation_data.action
 
+            # Gather and index all fcurves once instead of re-scanning
+            # them for every property (see note in the pose-bone branch above).
+            fcurves_by_path = {}
+            for fc in get_action_fcurves(action, obj):
+                fcurves_by_path.setdefault(fc.data_path, []).append(fc)
+
             # Process location, rotation, and scale for each object
             for data_path in ["location", "rotation_euler", "rotation_quaternion", "scale"]:
-                obj_fcurves = [
-                    fc for fc in get_action_fcurves(action, obj) if fc.data_path == data_path]
+                obj_fcurves = fcurves_by_path.get(data_path)
                 if not obj_fcurves:
                     continue
 
