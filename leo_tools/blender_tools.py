@@ -112,6 +112,8 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.operator("leo_tools.fixed_threads",
                         text="Set fixed threads to 16")
         layout.operator("leo_tools.threads_all", text="Use all threads")
+        layout.operator("leo_tools.set_all_passepartout_opacity",
+                        text="Set passepartout opacity to 1")
         layout.label(text="Utils")
         layout.operator("leo_tools.add_subdiv",
                         text="Add subdivision to selection")
@@ -1023,6 +1025,17 @@ class create_checker(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class set_all_passepartout_opacity(bpy.types.Operator):
+    bl_idname = "leo_tools.set_all_passepartout_opacity"
+    bl_label = "Set all camera passepartout opacity to 1"
+    bl_description = "Set the passepartout opacity to 1 on every camera in the file"
+
+    def execute(self, context):
+        count = set_camera_passepartout_opacity()
+        self.report({'INFO'}, f"Set passepartout opacity to 1 on {count} camera(s)")
+        return {'FINISHED'}
+
+
 class mirror_rig_drivers(bpy.types.Operator):
     bl_idname = "leo_tools.mirror_rig_drivers"
     bl_label = "Mirror the rig drivers"
@@ -1672,6 +1685,15 @@ def set_thread_all():
     bpy.context.scene.render.threads_mode = 'AUTO'
 
 
+def set_camera_passepartout_opacity(opacity=1.0):
+    """Set passepartout_alpha to opacity on every camera data-block, return the count updated."""
+    count = 0
+    for camera in bpy.data.cameras:
+        camera.passepartout_alpha = opacity
+        count += 1
+    return count
+
+
 def refresh_viewport():
     bpy.context.view_layer.update()
     for area in bpy.context.screen.areas:
@@ -1850,6 +1872,8 @@ def register():
         bpy.utils.register_class(fixed_threads)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_threads_all'):
         bpy.utils.register_class(threads_all)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_set_all_passepartout_opacity'):
+        bpy.utils.register_class(set_all_passepartout_opacity)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_checker'):
         bpy.utils.register_class(create_checker)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_subdiv'):
@@ -1936,6 +1960,8 @@ def unregister():
         bpy.utils.unregister_class(fixed_threads)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_threads_all'):
         bpy.utils.unregister_class(threads_all)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_set_all_passepartout_opacity'):
+        bpy.utils.unregister_class(set_all_passepartout_opacity)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_create_checker'):
         bpy.utils.unregister_class(create_checker)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_add_subdiv'):
