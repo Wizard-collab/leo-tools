@@ -11,6 +11,7 @@ from leo_tools import animation_transfer
 from leo_tools import empty_from_vertices
 from leo_tools import collection_display
 from leo_tools import bake_tools
+from leo_tools import render_tools
 
 
 def get_action_fcurves(action, id_data=None):
@@ -1848,6 +1849,9 @@ def register():
 
     # Register bake tools
     bake_tools.register()
+
+    # Register render tools
+    render_tools.register()
     
     # Register our operators (only if not already registered)
     if not hasattr(bpy.types, 'ANIM_OT_reset_tween_stored_pose'):
@@ -2008,6 +2012,9 @@ def unregister():
 
     # Unregister bake tools
     bake_tools.unregister()
+
+    # Unregister render tools
+    render_tools.unregister()
     
     # Unregister shape key operators (only if registered)
     if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
