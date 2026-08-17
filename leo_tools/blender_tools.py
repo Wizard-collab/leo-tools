@@ -37,7 +37,8 @@ def get_action_fcurves(action, id_data=None):
         action_slot = id_data.animation_data.action_slot
 
     if action_slot is not None:
-        channelbag = anim_utils.action_get_channelbag_for_slot(action, action_slot)
+        channelbag = anim_utils.action_get_channelbag_for_slot(
+            action, action_slot)
         return list(channelbag.fcurves) if channelbag else []
 
     # No specific slot known - gather fcurves from every channelbag
@@ -50,32 +51,46 @@ def get_action_fcurves(action, id_data=None):
     return fcurves
 
 
-class CustomToolboxPanel(bpy.types.Panel):
-    bl_label = "Leo tools"  # The name of the panel
-    bl_idname = "VIEW3D_PT_leo_tools"  # Unique ID for the panel
-    bl_space_type = 'VIEW_3D'  # Panel location
-    # Region (e.g., 'UI' for the N-panel, 'TOOLS' for the T-panel)
+class TexturingPanel(bpy.types.Panel):
+    bl_label = "Texturing"
+    bl_idname = "VIEW3D_PT_leo_texturing"
+    bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Leo tools"  # Tab name in the N-panel
+    bl_category = "Texturing"
 
     def draw(self, context):
         layout = self.layout
-        obj = context.object
-        # Add some buttons/operators to the panel
-        layout.label(text="Texturing")
         layout.operator("leo_tools.create_udim_mask",
                         text="Create mask with UDIMS")
         layout.operator("leo_tools.create_udim_paint_mask",
-                text="Create UDIM paint mask")
+                        text="Create UDIM paint mask")
         layout.operator("leo_tools.smart_bake_textures",
-                text="Bake selected textures")
+                        text="Bake selected textures")
         layout.operator("leo_tools.force_baked_inputs",
-            text="Force baked inputs")
+                        text="Force baked inputs")
         layout.operator("leo_tools.force_original_inputs",
-            text="Force original inputs")
-        layout.label(text="Rigging Tools")
+                        text="Force original inputs")
+        layout.separator()
+        layout.label(text="Shading")
+        layout.operator("leo_tools.remove_materials", text="Remove materials")
+        layout.operator("leo_tools.create_checker",
+                        text="Create new checker material")
+
+
+class RiggingPanel(bpy.types.Panel):
+    bl_label = "Rigging"
+    bl_idname = "VIEW3D_PT_leo_rigging"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Rigging"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Drivers")
         layout.operator("leo_tools.mirror_rig_drivers",
                         text="Mirror rig drivers")
+        layout.separator()
+        layout.label(text="Shape Keys")
         layout.operator("mesh.create_corrective_shapekey",
                         text="Create Corrective Shape Key")
         layout.operator("mesh.create_intermediate_shapekey",
@@ -86,60 +101,89 @@ class CustomToolboxPanel(bpy.types.Panel):
                         text="Mirror Shape Keys L→R")
         layout.operator("mesh.create_combo_shapekey",
                         text="Create Combo Shape Key")
+        layout.separator()
+        layout.label(text="Utils")
         layout.operator("mesh.create_empty_from_vertices",
                         text="Empty from 3 Vertices")
+        layout.operator("leo_tools.create_cage_deform_joints",
+                        text="Create cage deform joints")
+
+
+class ModelingPanel(bpy.types.Panel):
+    bl_label = "Modeling"
+    bl_idname = "VIEW3D_PT_leo_modeling"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Modeling"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Mirror")
+        layout.operator("leo_tools.add_mirror_modifier",
+                        text="Add Mirror Modifier")
+        layout.operator("leo_tools.apply_mirror_modifiers",
+                        text="Apply mirror modifiers")
         layout.separator()
-        layout.label(text="Display Tools")
+        layout.label(text="Modifiers")
+        layout.operator("leo_tools.add_subdiv",
+                        text="Add subdivision to selection")
+        layout.operator("leo_tools.remove_subdivision_modifiers",
+                        text="Remove subdivision modifiers")
+        layout.operator("leo_tools.remove_collision_modifiers",
+                        text="Remove collision modifiers")
+        layout.operator("leo_tools.remove_all_modifiers",
+                        text="Remove all modifiers")
+        layout.separator()
+        layout.label(text="Mesh")
+        layout.operator("leo_tools.remove_all_vertex_groups",
+                        text="Remove all vertex groups")
+        layout.separator()
+        layout.label(text="Naming")
+        layout.operator("leo_tools.clean_shapes_names",
+                        text="Clean shapes names")
+        layout.operator("leo_tools.replace_dots_in_names",
+                        text="Replace . by _ in names")
+        layout.operator("leo_tools.add_msh_suffix",
+                        text="Add _MSH to meshes")
+
+
+class DisplayPanel(bpy.types.Panel):
+    bl_label = "Display"
+    bl_idname = "VIEW3D_PT_leo_display"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Display"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Collections")
         layout.operator("object.collection_bounding_box",
                         text="Collection to Bounding Box")
         layout.operator("object.collection_textured",
                         text="Collection to Textured")
         layout.operator("leo_tools.local_copy_linked_collection",
-                text="Local copy linked collection")
+                        text="Local copy linked collection")
         layout.separator()
-        layout.label(text="Animation Tools")
-        layout.operator("anim.flip_animation",
-                        text="Flip Animation")
-        layout.operator("leo_tools.select_animated_objects",
-                text="Select animated objects")
-        layout.operator("leo_tools.delete_animation_actions",
-                text="Delete animation actions")
-        layout.label(text="Shading Tools")
-        layout.operator("leo_tools.remove_materials", text="Remove materials")
-        layout.operator("leo_tools.create_checker",
-                        text="Create new checker material")
-        layout.label(text="Rendering Tools")
+        layout.label(text="Grease Pencil")
+        layout.operator("leo_tools.merge_gp_objects",
+                        text="Duplicate & Bake GP")
+
+
+class RenderSettingsPanel(bpy.types.Panel):
+    bl_label = "Render Settings"
+    bl_idname = "VIEW3D_PT_leo_render_settings"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Render Tools"
+
+    def draw(self, context):
+        layout = self.layout
         layout.operator("leo_tools.init_settings", text="Init Cycles")
         layout.operator("leo_tools.fixed_threads",
                         text="Set fixed threads to 16")
         layout.operator("leo_tools.threads_all", text="Use all threads")
         layout.operator("leo_tools.set_all_passepartout_opacity",
                         text="Set passepartout opacity to 1")
-        layout.label(text="Utils")
-        layout.operator("leo_tools.add_subdiv",
-                        text="Add subdivision to selection")
-        layout.operator("leo_tools.clean_shapes_names",
-                        text="Clean shapes names")
-        layout.operator("leo_tools.replace_dots_in_names",
-                text="Replace . by _ in names")
-        layout.operator("leo_tools.add_msh_suffix",
-                        text="Add _MSH to meshes")
-        layout.operator("leo_tools.remove_all_modifiers",
-                        text="Remove all modifiers")
-        layout.operator("leo_tools.remove_collision_modifiers",
-                text="Remove collision modifiers")
-        layout.operator("leo_tools.remove_subdivision_modifiers",
-                text="Remove subdivision modifiers")
-        layout.operator("leo_tools.apply_mirror_modifiers",
-                text="Apply mirror modifiers")
-        layout.operator("leo_tools.remove_all_vertex_groups",
-                        text="Remove all vertex groups")
-        layout.operator("leo_tools.create_cage_deform_joints",
-                        text="Create cage deform joints")
-        layout.separator()
-        layout.label(text="Grease Pencil")
-        layout.operator("leo_tools.merge_gp_objects",
-                        text="Duplicate & Bake GP")
 
 
 class AnimToolsPanel(bpy.types.Panel):
@@ -152,54 +196,67 @@ class AnimToolsPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         obj = context.object
-        
+
+        layout.label(text="Animation")
+        layout.operator("anim.flip_animation", text="Flip Animation")
+        layout.operator("leo_tools.select_animated_objects",
+                        text="Select animated objects")
+        layout.operator("leo_tools.delete_animation_actions",
+                        text="Delete animation actions")
+
+        layout.separator()
+
         # Keyframe Interpolation Mode
         layout.label(text="Default Interpolation")
         prefs = context.preferences.edit
         current_mode = prefs.keyframe_new_interpolation_type
-        
+
         if current_mode == 'CONSTANT':
             mode_text = "Current: Stepped"
             button_text = "Switch to Curve"
         else:
             mode_text = "Current: Curve"
             button_text = "Switch to Stepped"
-        
+
         layout.label(text=mode_text)
         layout.operator("anim.toggle_interpolation_mode", text=button_text)
-        
+
         layout.separator()
-        
+
         # Mode switching
         layout.label(text="Mode Switch")
         if obj and obj.type == 'ARMATURE':
             if obj.mode == 'POSE':
-                layout.operator("anim.toggle_pose_object_mode", text="Switch to Object Mode")
+                layout.operator("anim.toggle_pose_object_mode",
+                                text="Switch to Object Mode")
             elif obj.mode == 'OBJECT':
-                layout.operator("anim.toggle_pose_object_mode", text="Switch to Pose Mode")
+                layout.operator("anim.toggle_pose_object_mode",
+                                text="Switch to Pose Mode")
             else:
                 layout.label(text="Switch to Object or Pose Mode")
         else:
             layout.label(text="Select an armature")
-        
+
         layout.separator()
-        
+
         # Convert rig interpolation
         layout.label(text="Convert Rig Keys")
         if obj and obj.type == 'ARMATURE' and obj.animation_data and obj.animation_data.action:
-            layout.operator("anim.convert_rig_interpolation", text="Stepped ↔ Curve")
+            layout.operator("anim.convert_rig_interpolation",
+                            text="Stepped ↔ Curve")
         else:
             layout.label(text="No animated rig selected")
-        
+
         layout.separator()
-        
+
         layout.label(text="Tween Machine")
         if obj:
             layout.label(text=f"Selected Object: {obj.name}")
             layout.prop(context.scene, "tween_machine_percentage",
                         text="Percentage", slider=True)
             if context.scene.tween_stored_pose:
-                layout.operator("anim.reset_tween_stored_pose", text="Clear Stored Pose")
+                layout.operator("anim.reset_tween_stored_pose",
+                                text="Clear Stored Pose")
         else:
             layout.label(text="No object selected")
             layout.prop(context.scene, "tween_machine_percentage",
@@ -224,11 +281,11 @@ class toggle_pose_object_mode(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.active_object
-        
+
         if not obj or obj.type != 'ARMATURE':
             self.report({'ERROR'}, "Please select an armature")
             return {'CANCELLED'}
-        
+
         if obj.mode == 'POSE':
             bpy.ops.object.mode_set(mode='OBJECT')
             self.report({'INFO'}, "Switched to Object Mode")
@@ -239,7 +296,7 @@ class toggle_pose_object_mode(bpy.types.Operator):
             # If in another mode (like Edit mode), go to Object mode first
             bpy.ops.object.mode_set(mode='OBJECT')
             self.report({'INFO'}, "Switched to Object Mode")
-        
+
         return {'FINISHED'}
 
 
@@ -251,18 +308,20 @@ class toggle_interpolation_mode(bpy.types.Operator):
     def execute(self, context):
         prefs = context.preferences.edit
         current_mode = prefs.keyframe_new_interpolation_type
-        
+
         if current_mode == 'CONSTANT':
             prefs.keyframe_new_interpolation_type = 'BEZIER'
-            self.report({'INFO'}, "Default interpolation set to Curve (Bezier)")
+            self.report(
+                {'INFO'}, "Default interpolation set to Curve (Bezier)")
         else:
             prefs.keyframe_new_interpolation_type = 'CONSTANT'
-            self.report({'INFO'}, "Default interpolation set to Stepped (Constant)")
-        
+            self.report(
+                {'INFO'}, "Default interpolation set to Stepped (Constant)")
+
         # Force UI refresh
         for area in context.screen.areas:
             area.tag_redraw()
-        
+
         return {'FINISHED'}
 
 
@@ -273,22 +332,22 @@ class convert_rig_interpolation(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.active_object
-        
+
         if not obj or obj.type != 'ARMATURE':
             self.report({'ERROR'}, "Please select an armature")
             return {'CANCELLED'}
-        
+
         if not obj.animation_data or not obj.animation_data.action:
             self.report({'ERROR'}, "Armature has no animation data")
             return {'CANCELLED'}
-        
+
         action = obj.animation_data.action
-        
+
         # Count interpolation types to determine what to convert to
         constant_count = 0
         bezier_count = 0
         total_keys = 0
-        
+
         for fcurve in get_action_fcurves(action, obj):
             for keyframe in fcurve.keyframe_points:
                 total_keys += 1
@@ -296,11 +355,11 @@ class convert_rig_interpolation(bpy.types.Operator):
                     constant_count += 1
                 elif keyframe.interpolation == 'BEZIER':
                     bezier_count += 1
-        
+
         if total_keys == 0:
             self.report({'WARNING'}, "No keyframes found")
             return {'CANCELLED'}
-        
+
         # Determine target interpolation (convert to whichever is less common)
         if constant_count >= bezier_count:
             target_interpolation = 'BEZIER'
@@ -308,7 +367,7 @@ class convert_rig_interpolation(bpy.types.Operator):
         else:
             target_interpolation = 'CONSTANT'
             target_name = "Stepped (Constant)"
-        
+
         # Convert all keyframes
         converted = 0
         for fcurve in get_action_fcurves(action, obj):
@@ -316,13 +375,14 @@ class convert_rig_interpolation(bpy.types.Operator):
                 if keyframe.interpolation != target_interpolation:
                     keyframe.interpolation = target_interpolation
                     converted += 1
-        
-        self.report({'INFO'}, f"Converted {converted} keyframes to {target_name}")
-        
+
+        self.report(
+            {'INFO'}, f"Converted {converted} keyframes to {target_name}")
+
         # Force viewport update
         for area in context.screen.areas:
             area.tag_redraw()
-        
+
         return {'FINISHED'}
 
 
@@ -372,7 +432,8 @@ class create_udim_paint_mask(bpy.types.Operator):
             self.report({'ERROR'}, "Please select a mesh object")
             return {'CANCELLED'}
 
-        image = texturing_tools.create_map_with_udims(self.image_name, self.image_width)
+        image = texturing_tools.create_map_with_udims(
+            self.image_name, self.image_width)
         if image is None:
             image = bpy.data.images.get(self.image_name)
         if image is None:
@@ -380,7 +441,8 @@ class create_udim_paint_mask(bpy.types.Operator):
             return {'CANCELLED'}
 
         if obj.active_material is None:
-            obj.active_material = bpy.data.materials.new(name=f"{obj.name}_MAT")
+            obj.active_material = bpy.data.materials.new(
+                name=f"{obj.name}_MAT")
 
         material = obj.active_material
         material.use_nodes = True
@@ -399,7 +461,8 @@ class create_udim_paint_mask(bpy.types.Operator):
                     principled = node
                     break
             if principled:
-                tex_node.location = (principled.location.x - 420, principled.location.y - 260)
+                tex_node.location = (
+                    principled.location.x - 420, principled.location.y - 260)
 
         tex_node.image = image
         for node in node_tree.nodes:
@@ -416,7 +479,8 @@ class create_udim_paint_mask(bpy.types.Operator):
         try:
             bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
         except RuntimeError:
-            self.report({'WARNING'}, f"Created UDIM mask '{image.name}', but could not switch to Texture Paint mode")
+            self.report(
+                {'WARNING'}, f"Created UDIM mask '{image.name}', but could not switch to Texture Paint mode")
             return {'FINISHED'}
 
         # Configure paint session defaults for the created mask.
@@ -439,7 +503,8 @@ class create_udim_paint_mask(bpy.types.Operator):
             except TypeError:
                 pass
 
-        self.report({'INFO'}, f"Created UDIM mask '{image.name}', added node in active shader, switched to Texture Paint")
+        self.report(
+            {'INFO'}, f"Created UDIM mask '{image.name}', added node in active shader, switched to Texture Paint")
         return {'FINISHED'}
 
 
@@ -512,7 +577,8 @@ class local_copy_linked_collection(bpy.types.Operator):
         def add_target(candidate):
             linked = self._linked_source_collection(candidate)
             if not linked:
-                linked = self._linked_ancestor_collection(candidate, parent_map)
+                linked = self._linked_ancestor_collection(
+                    candidate, parent_map)
             if linked:
                 targets.append(linked)
 
@@ -549,13 +615,15 @@ class local_copy_linked_collection(bpy.types.Operator):
 
     def _copy_object_deep(self, src_obj, object_map):
         new_obj = src_obj.copy()
-        new_obj.name = self._next_local_name(src_obj.name, bpy.data.objects.keys())
+        new_obj.name = self._next_local_name(
+            src_obj.name, bpy.data.objects.keys())
 
         if src_obj.data:
             try:
                 new_obj.data = src_obj.data.copy()
                 if new_obj.data:
-                    new_obj.data.name = self._next_local_name(src_obj.data.name, getattr(bpy.data, src_obj.data.__class__.__name__.lower() + 's', bpy.data.meshes).keys())
+                    new_obj.data.name = self._next_local_name(src_obj.data.name, getattr(
+                        bpy.data, src_obj.data.__class__.__name__.lower() + 's', bpy.data.meshes).keys())
             except RuntimeError:
                 pass
 
@@ -563,7 +631,8 @@ class local_copy_linked_collection(bpy.types.Operator):
             try:
                 new_obj.animation_data.action = new_obj.animation_data.action.copy()
                 if new_obj.animation_data.action:
-                    new_obj.animation_data.action.name = self._next_local_name(new_obj.animation_data.action.name, bpy.data.actions.keys())
+                    new_obj.animation_data.action.name = self._next_local_name(
+                        new_obj.animation_data.action.name, bpy.data.actions.keys())
             except RuntimeError:
                 pass
 
@@ -573,7 +642,8 @@ class local_copy_linked_collection(bpy.types.Operator):
                     continue
                 try:
                     copied_mat = material.copy()
-                    copied_mat.name = self._next_local_name(material.name, bpy.data.materials.keys())
+                    copied_mat.name = self._next_local_name(
+                        material.name, bpy.data.materials.keys())
                     new_obj.data.materials[slot_index] = copied_mat
                 except RuntimeError:
                     pass
@@ -582,7 +652,8 @@ class local_copy_linked_collection(bpy.types.Operator):
         return new_obj
 
     def _copy_collection_recursive(self, src_collection, object_map):
-        new_collection_name = self._next_local_name(src_collection.name, bpy.data.collections.keys())
+        new_collection_name = self._next_local_name(
+            src_collection.name, bpy.data.collections.keys())
         new_collection = bpy.data.collections.new(new_collection_name)
 
         for src_obj in src_collection.objects:
@@ -615,8 +686,10 @@ class local_copy_linked_collection(bpy.types.Operator):
                 pass
 
         for scene in bpy.data.scenes:
-            has_src = any(child == src_collection for child in scene.collection.children)
-            has_new = any(child == new_collection for child in scene.collection.children)
+            has_src = any(
+                child == src_collection for child in scene.collection.children)
+            has_new = any(
+                child == new_collection for child in scene.collection.children)
             if has_src and not has_new:
                 try:
                     scene.collection.children.link(new_collection)
@@ -650,7 +723,8 @@ class local_copy_linked_collection(bpy.types.Operator):
     def execute(self, context):
         linked_collections = self._collect_target_collections(context)
         if not linked_collections:
-            self.report({'ERROR'}, "No linked collection found. Select a linked collection instance or an object from a linked hierarchy")
+            self.report(
+                {'ERROR'}, "No linked collection found. Select a linked collection instance or an object from a linked hierarchy")
             return {'CANCELLED'}
 
         copied_count = 0
@@ -658,8 +732,10 @@ class local_copy_linked_collection(bpy.types.Operator):
         collection_map = {}
 
         for src_collection in linked_collections:
-            new_collection = self._copy_collection_recursive(src_collection, object_map)
-            self._link_collection_like_source(context, src_collection, new_collection)
+            new_collection = self._copy_collection_recursive(
+                src_collection, object_map)
+            self._link_collection_like_source(
+                context, src_collection, new_collection)
             collection_map[src_collection] = new_collection
             copied_count += 1
 
@@ -773,7 +849,8 @@ class remove_subdivision_modifiers(bpy.types.Operator):
                 if mod.type == 'SUBSURF':
                     obj.modifiers.remove(mod)
                     removed_count += 1
-        self.report({'INFO'}, f"Removed {removed_count} Subdivision modifier(s)")
+        self.report(
+            {'INFO'}, f"Removed {removed_count} Subdivision modifier(s)")
         return {'FINISHED'}
 
 
@@ -787,7 +864,8 @@ class select_animated_objects(bpy.types.Operator):
             try:
                 bpy.ops.object.mode_set(mode='OBJECT')
             except RuntimeError:
-                self.report({'ERROR'}, "Switch to Object mode to change selection")
+                self.report(
+                    {'ERROR'}, "Switch to Object mode to change selection")
                 return {'CANCELLED'}
 
         bpy.ops.object.select_all(action='DESELECT')
@@ -803,7 +881,8 @@ class select_animated_objects(bpy.types.Operator):
             return {'CANCELLED'}
 
         context.view_layer.objects.active = animated_objects[0]
-        self.report({'INFO'}, f"Selected {len(animated_objects)} animated object(s)")
+        self.report(
+            {'INFO'}, f"Selected {len(animated_objects)} animated object(s)")
         return {'FINISHED'}
 
 
@@ -834,13 +913,97 @@ class delete_animation_actions(bpy.types.Operator):
                 deleted_count += 1
 
         if touched_objects == 0:
-            self.report({'WARNING'}, "No selected object has an animation Action")
+            self.report(
+                {'WARNING'}, "No selected object has an animation Action")
             return {'CANCELLED'}
 
         self.report(
             {'INFO'},
             f"Deleted {deleted_count} action(s), unlinked {unlinked_shared_count} shared action(s)"
         )
+        return {'FINISHED'}
+
+
+MIRROR_EMPTY_NAME = "_mirror_center"
+
+
+class add_mirror_modifier(bpy.types.Operator):
+    bl_idname = "leo_tools.add_mirror_modifier"
+    bl_label = "Add Mirror Modifier"
+    bl_description = (
+        "Add a Mirror modifier to selected mesh objects using a shared empty "
+        "at the world origin as mirror center. The empty is hidden and non-selectable."
+    )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    axis_x: bpy.props.BoolProperty(name="X", default=True)
+    axis_y: bpy.props.BoolProperty(name="Y", default=False)
+    axis_z: bpy.props.BoolProperty(name="Z", default=False)
+    use_bisect_x: bpy.props.BoolProperty(name="Bisect X", default=False)
+    use_bisect_y: bpy.props.BoolProperty(name="Bisect Y", default=False)
+    use_bisect_z: bpy.props.BoolProperty(name="Bisect Z", default=False)
+    merge_threshold: bpy.props.FloatProperty(
+        name="Merge Distance", default=0.001, min=0.0, soft_max=0.1
+    )
+    use_clip: bpy.props.BoolProperty(name="Clipping", default=True)
+
+    @classmethod
+    def poll(cls, context):
+        return any(o.type == 'MESH' for o in context.selected_objects)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row(align=True)
+        row.prop(self, "axis_x", toggle=True)
+        row.prop(self, "axis_y", toggle=True)
+        row.prop(self, "axis_z", toggle=True)
+        row = layout.row(align=True)
+        row.prop(self, "use_bisect_x", toggle=True)
+        row.prop(self, "use_bisect_y", toggle=True)
+        row.prop(self, "use_bisect_z", toggle=True)
+        layout.prop(self, "merge_threshold")
+        layout.prop(self, "use_clip")
+
+    def _get_or_create_mirror_empty(self, context):
+        """Return the shared mirror-center empty, creating it if needed."""
+        empty = bpy.data.objects.get(MIRROR_EMPTY_NAME)
+        if empty is None:
+            empty = bpy.data.objects.new(MIRROR_EMPTY_NAME, None)
+            empty.empty_display_type = 'PLAIN_AXES'
+            empty.empty_display_size = 0.0
+            context.collection.objects.link(empty)
+
+        empty.location = (0.0, 0.0, 0.0)
+        empty.hide_viewport = True
+        empty.hide_render = True
+        empty.hide_select = True
+        return empty
+
+    def execute(self, context):
+        if not (self.axis_x or self.axis_y or self.axis_z):
+            self.report({'ERROR'}, "Select at least one mirror axis")
+            return {'CANCELLED'}
+
+        mirror_empty = self._get_or_create_mirror_empty(context)
+        meshes = [o for o in context.selected_objects if o.type == 'MESH']
+
+        for obj in meshes:
+            mod = obj.modifiers.new(name="Mirror", type='MIRROR')
+            mod.mirror_object = mirror_empty
+            mod.use_axis[0] = self.axis_x
+            mod.use_axis[1] = self.axis_y
+            mod.use_axis[2] = self.axis_z
+            mod.use_bisect_axis[0] = self.use_bisect_x
+            mod.use_bisect_axis[1] = self.use_bisect_y
+            mod.use_bisect_axis[2] = self.use_bisect_z
+            mod.merge_threshold = self.merge_threshold
+            mod.use_clip = self.use_clip
+
+        self.report(
+            {'INFO'}, f"Mirror modifier added to {len(meshes)} object(s)")
         return {'FINISHED'}
 
 
@@ -862,7 +1025,8 @@ class apply_mirror_modifiers(bpy.types.Operator):
             try:
                 bpy.ops.object.mode_set(mode='OBJECT')
             except RuntimeError:
-                self.report({'ERROR'}, "Switch to Object mode to apply modifiers")
+                self.report(
+                    {'ERROR'}, "Switch to Object mode to apply modifiers")
                 return {'CANCELLED'}
 
         applied_count = 0
@@ -873,7 +1037,8 @@ class apply_mirror_modifiers(bpy.types.Operator):
             if not hasattr(obj, "modifiers"):
                 continue
 
-            mirror_modifiers = [mod.name for mod in obj.modifiers if mod.type == 'MIRROR']
+            mirror_modifiers = [
+                mod.name for mod in obj.modifiers if mod.type == 'MIRROR']
             if not mirror_modifiers:
                 continue
 
@@ -904,14 +1069,17 @@ class apply_mirror_modifiers(bpy.types.Operator):
                 pass
 
         if applied_count == 0 and touched_objects == 0:
-            self.report({'WARNING'}, "No Mirror modifier found on selected objects")
+            self.report(
+                {'WARNING'}, "No Mirror modifier found on selected objects")
             return {'CANCELLED'}
 
         if failed_count > 0:
-            self.report({'WARNING'}, f"Applied {applied_count} Mirror modifier(s), {failed_count} failed")
+            self.report(
+                {'WARNING'}, f"Applied {applied_count} Mirror modifier(s), {failed_count} failed")
             return {'FINISHED'}
 
-        self.report({'INFO'}, f"Applied {applied_count} Mirror modifier(s) on {touched_objects} object(s)")
+        self.report(
+            {'INFO'}, f"Applied {applied_count} Mirror modifier(s) on {touched_objects} object(s)")
         return {'FINISHED'}
 
 
@@ -941,24 +1109,25 @@ class create_cage_deform_joints(bpy.types.Operator):
         if not obj or obj.type != 'MESH':
             self.report({'ERROR'}, "Please select a mesh object")
             return {'CANCELLED'}
-        
+
         mesh = obj.data
         mesh_name = obj.name
-        
+
         # Create armature
         armature_data = bpy.data.armatures.new(f"{mesh_name}_CAGE_DEFORM")
-        armature_obj = bpy.data.objects.new(f"{mesh_name}_CAGE_DEFORM", armature_data)
+        armature_obj = bpy.data.objects.new(
+            f"{mesh_name}_CAGE_DEFORM", armature_data)
         context.collection.objects.link(armature_obj)
-        
+
         # Position armature at mesh location
         armature_obj.location = obj.location
         armature_obj.rotation_euler = obj.rotation_euler
         armature_obj.scale = obj.scale
-        
+
         # Enter edit mode to create bones
         context.view_layer.objects.active = armature_obj
         bpy.ops.object.mode_set(mode='EDIT')
-        
+
         # Create a bone for each vertex
         for vert in mesh.vertices:
             bone_name = f"{vert.index}_CAGE_DEFORM"
@@ -969,10 +1138,11 @@ class create_cage_deform_joints(bpy.types.Operator):
             local_pos = armature_obj.matrix_world.inverted() @ world_pos
             bone.head = local_pos
             bone.tail = local_pos + mathutils.Vector((0, 0, 0.1))
-        
+
         bpy.ops.object.mode_set(mode='OBJECT')
-        
-        self.report({'INFO'}, f"Created {len(mesh.vertices)} joints for cage deform")
+
+        self.report(
+            {'INFO'}, f"Created {len(mesh.vertices)} joints for cage deform")
         return {'FINISHED'}
 
 
@@ -1033,7 +1203,8 @@ class set_all_passepartout_opacity(bpy.types.Operator):
 
     def execute(self, context):
         count = set_camera_passepartout_opacity()
-        self.report({'INFO'}, f"Set passepartout opacity to 1 on {count} camera(s)")
+        self.report(
+            {'INFO'}, f"Set passepartout opacity to 1 on {count} camera(s)")
         return {'FINISHED'}
 
 
@@ -1053,17 +1224,17 @@ class bake_gp_objects(bpy.types.Operator):
     bl_label = "Duplicate & Bake GP Objects"
     bl_description = "Duplicate GP objects and bake constraints/parenting/modifiers (Shrinkwrap, etc.) to keyframes"
     bl_options = {'REGISTER', 'UNDO'}
-    
+
     # Support both legacy GP (Blender 3.x) and new GP v3 (Blender 4.0+)
     GP_TYPES = ('GPENCIL', 'GREASEPENCIL')
-    
+
     # Property for user to input the suffix for baked objects
     bake_suffix: bpy.props.StringProperty(
         name="Suffix",
         description="Suffix to add to duplicated object names",
         default="_baked"
     )
-    
+
     bake_modifiers: bpy.props.BoolProperty(
         name="Bake Modifiers",
         description="Bake GP modifiers (Shrinkwrap, etc.) into stroke data",
@@ -1073,14 +1244,14 @@ class bake_gp_objects(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         # Check if we have at least one GP object selected
-        selected_gp = [obj for obj in context.selected_objects 
+        selected_gp = [obj for obj in context.selected_objects
                        if obj.type in cls.GP_TYPES]
         return len(selected_gp) >= 1
-    
+
     def invoke(self, context, event):
         # Show dialog
         return context.window_manager.invoke_props_dialog(self)
-    
+
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "bake_suffix")
@@ -1089,31 +1260,31 @@ class bake_gp_objects(bpy.types.Operator):
     def bake_gp_transforms(self, context, gp_obj, frame_start, frame_end):
         """Bake all constraints and parenting transforms to keyframes for a GP object"""
         scene = context.scene
-        
+
         # Check if object has constraints or parent
         has_constraints = len(gp_obj.constraints) > 0
         has_parent = gp_obj.parent is not None
-        
+
         if not has_constraints and not has_parent:
             return False  # Nothing to bake
-        
+
         # Store world matrices for each frame
         world_matrices = {}
         for frame in range(frame_start, frame_end + 1):
             scene.frame_set(frame)
             world_matrices[frame] = gp_obj.matrix_world.copy()
-        
+
         # Remove constraints
         for constraint in gp_obj.constraints[:]:
             gp_obj.constraints.remove(constraint)
-        
+
         # Clear parent while keeping transform
         if gp_obj.parent:
             # Store current world matrix
             mat_world = gp_obj.matrix_world.copy()
             gp_obj.parent = None
             gp_obj.matrix_world = mat_world
-        
+
         # Bake keyframes
         for frame, mat in world_matrices.items():
             scene.frame_set(frame)
@@ -1121,9 +1292,9 @@ class bake_gp_objects(bpy.types.Operator):
             gp_obj.keyframe_insert(data_path="location", frame=frame)
             gp_obj.keyframe_insert(data_path="rotation_euler", frame=frame)
             gp_obj.keyframe_insert(data_path="scale", frame=frame)
-        
+
         return True
-    
+
     def get_gp_modifiers(self, gp_obj):
         """Get GP modifiers - different attribute name for legacy GP vs GP v3"""
         # Legacy GP (Blender 3.x) uses grease_pencil_modifiers
@@ -1133,38 +1304,38 @@ class bake_gp_objects(bpy.types.Operator):
         if hasattr(gp_obj, 'modifiers') and gp_obj.modifiers:
             return gp_obj.modifiers
         return None
-    
+
     def bake_gp_modifiers(self, context, gp_obj, frame_start, frame_end):
         """Bake GP modifiers (like Shrinkwrap) into the stroke point data"""
         # Get the appropriate modifier collection
         gp_modifiers = self.get_gp_modifiers(gp_obj)
-        
+
         if not gp_modifiers or len(gp_modifiers) == 0:
             return False
-        
+
         scene = context.scene
         depsgraph = context.evaluated_depsgraph_get()
         gp_data = gp_obj.data
-        
+
         # Determine if this is legacy GP or GP v3
         is_legacy_gp = gp_obj.type == 'GPENCIL'
-        
+
         # For each frame, get the evaluated (modifier-applied) stroke positions
         for frame in range(frame_start, frame_end + 1):
             scene.frame_set(frame)
             depsgraph.update()
-            
+
             # Get evaluated object with modifiers applied
             eval_obj = gp_obj.evaluated_get(depsgraph)
             eval_data = eval_obj.data
-            
+
             if is_legacy_gp:
                 # Legacy GP (Blender 3.x): layers -> frames -> strokes -> points
                 for layer_idx, layer in enumerate(gp_data.layers):
                     if layer_idx >= len(eval_data.layers):
                         continue
                     eval_layer = eval_data.layers[layer_idx]
-                    
+
                     # Find the frame for this frame number
                     src_frame = None
                     eval_frame = None
@@ -1176,16 +1347,16 @@ class bake_gp_objects(bpy.types.Operator):
                         if f.frame_number == frame:
                             eval_frame = f
                             break
-                    
+
                     if src_frame is None or eval_frame is None:
                         continue
-                    
+
                     # Copy deformed point positions from evaluated to original
                     for stroke_idx, stroke in enumerate(src_frame.strokes):
                         if stroke_idx >= len(eval_frame.strokes):
                             continue
                         eval_stroke = eval_frame.strokes[stroke_idx]
-                        
+
                         for point_idx, point in enumerate(stroke.points):
                             if point_idx >= len(eval_stroke.points):
                                 continue
@@ -1198,53 +1369,54 @@ class bake_gp_objects(bpy.types.Operator):
                     if layer_idx >= len(eval_data.layers):
                         continue
                     eval_layer = eval_data.layers[layer_idx]
-                    
+
                     # Find matching frames
                     for frame_idx, gp_frame in enumerate(layer.frames):
                         if gp_frame.frame_number != frame:
                             continue
-                        
+
                         # Find corresponding eval frame
                         eval_gp_frame = None
                         for ef in eval_layer.frames:
                             if ef.frame_number == frame:
                                 eval_gp_frame = ef
                                 break
-                        
+
                         if eval_gp_frame is None:
                             continue
-                        
+
                         # Access drawing data (GP v3 structure)
                         if hasattr(gp_frame, 'drawing') and hasattr(eval_gp_frame, 'drawing'):
                             src_drawing = gp_frame.drawing
                             eval_drawing = eval_gp_frame.drawing
-                            
+
                             if hasattr(src_drawing, 'strokes') and hasattr(eval_drawing, 'strokes'):
                                 for stroke_idx, stroke in enumerate(src_drawing.strokes):
                                     if stroke_idx >= len(eval_drawing.strokes):
                                         continue
                                     eval_stroke = eval_drawing.strokes[stroke_idx]
-                                    
+
                                     # Copy points - GP v3 uses 'points' attribute
                                     if hasattr(stroke, 'points') and hasattr(eval_stroke, 'points'):
                                         for point_idx in range(min(len(stroke.points), len(eval_stroke.points))):
-                                            stroke.points[point_idx].position = eval_stroke.points[point_idx].position.copy()
-        
+                                            stroke.points[point_idx].position = eval_stroke.points[point_idx].position.copy(
+                                            )
+
         # Remove all GP modifiers after baking
         modifier_names = [mod.name for mod in gp_modifiers]
         for mod_name in modifier_names:
             mod = gp_modifiers.get(mod_name)
             if mod:
                 gp_modifiers.remove(mod)
-        
+
         return True
-    
+
     def get_layer_name_attr(self, layer):
         """Get layer name attribute - 'info' for legacy GP, 'name' for GP v3"""
         if hasattr(layer, 'info'):
             return layer.info
         return layer.name
-    
+
     def set_layer_name(self, layer, name):
         """Set layer name - 'info' for legacy GP, 'name' for GP v3"""
         if hasattr(layer, 'info'):
@@ -1254,33 +1426,33 @@ class bake_gp_objects(bpy.types.Operator):
 
     def execute(self, context):
         # Get all selected GP objects
-        selected_gp = [obj for obj in context.selected_objects 
+        selected_gp = [obj for obj in context.selected_objects
                        if obj.type in self.GP_TYPES]
-        
+
         if len(selected_gp) == 0:
             self.report({'ERROR'}, "No Grease Pencil objects selected")
             return {'CANCELLED'}
-        
+
         # Store original names before duplicating
         original_names = {obj.name: obj.name for obj in selected_gp}
-        
+
         # Get frame range for baking
         frame_start = context.scene.frame_start
         frame_end = context.scene.frame_end
         current_frame = context.scene.frame_current
-        
+
         # Step 1: Duplicate selected GP objects (keeping originals)
         bpy.ops.object.select_all(action='DESELECT')
         for obj in selected_gp:
             obj.select_set(True)
         context.view_layer.objects.active = selected_gp[0]
-        
+
         bpy.ops.object.duplicate()
-        
+
         # Get the duplicated objects
-        duplicated_gp = [obj for obj in context.selected_objects 
+        duplicated_gp = [obj for obj in context.selected_objects
                          if obj.type in self.GP_TYPES]
-        
+
         # Map duplicates to their original names
         dup_to_original_name = {}
         for dup_obj in duplicated_gp:
@@ -1291,51 +1463,53 @@ class bake_gp_objects(bpy.types.Operator):
             else:
                 # Fallback: use the duplicate's name without suffix
                 dup_to_original_name[dup_obj] = base_name
-        
+
         # Step 2: Rename duplicated objects and their layers
         for dup_obj in duplicated_gp:
-            original_name = dup_to_original_name.get(dup_obj, dup_obj.name.rsplit('.', 1)[0])
-            
+            original_name = dup_to_original_name.get(
+                dup_obj, dup_obj.name.rsplit('.', 1)[0])
+
             # Rename object
             new_name = f"{original_name}{self.bake_suffix}"
             dup_obj.name = new_name
             if dup_obj.data:
                 dup_obj.data.name = new_name
-            
+
             # Rename layers to include original object name
             gp_data = dup_obj.data
             for layer in gp_data.layers:
                 current_name = self.get_layer_name_attr(layer)
                 if not current_name.startswith(original_name):
-                    self.set_layer_name(layer, f"{original_name}_{current_name}")
-        
+                    self.set_layer_name(
+                        layer, f"{original_name}_{current_name}")
+
         # Step 3: Bake GP modifiers (Shrinkwrap, etc.) if enabled
         modifiers_baked = 0
         if self.bake_modifiers:
             for gp_obj in duplicated_gp:
                 if self.bake_gp_modifiers(context, gp_obj, frame_start, frame_end):
                     modifiers_baked += 1
-        
+
         # Step 4: Bake constraints/parenting for all duplicated GP objects
         transforms_baked = 0
         for gp_obj in duplicated_gp:
             if self.bake_gp_transforms(context, gp_obj, frame_start, frame_end):
                 transforms_baked += 1
-        
+
         # Restore frame
         context.scene.frame_set(current_frame)
-        
+
         # Ensure all duplicated objects are selected
         bpy.ops.object.select_all(action='DESELECT')
         for obj in duplicated_gp:
             obj.select_set(True)
         if duplicated_gp:
             context.view_layer.objects.active = duplicated_gp[0]
-        
-        self.report({'INFO'}, 
+
+        self.report({'INFO'},
                     f"Duplicated {len(duplicated_gp)} GP objects "
                     f"({transforms_baked} transforms, {modifiers_baked} modifiers baked)")
-        
+
         return {'FINISHED'}
 
 
@@ -1343,7 +1517,7 @@ def update_tween(self, context):
     current_frame = context.scene.frame_current
     # Get the percentage from the scene property
     factor = context.scene.tween_machine_percentage / 100.0
-    
+
     # Get or create stored pose data
     import json
     stored_data = {}
@@ -1398,7 +1572,7 @@ def update_tween(self, context):
 
                 previous_frame, next_frame = find_keyframe_range(
                     bone_fcurves, current_frame)
-                
+
                 # If no keys found, skip
                 if previous_frame is None and next_frame is None:
                     continue
@@ -1410,7 +1584,8 @@ def update_tween(self, context):
                         # Both keys exist - normal interpolation
                         prev_value = fcurve.evaluate(previous_frame)
                         next_value = fcurve.evaluate(next_frame)
-                        interpolated_value = (1 - factor) * prev_value + factor * next_value
+                        interpolated_value = (
+                            1 - factor) * prev_value + factor * next_value
                     elif previous_frame is not None:
                         # Only previous key exists - interpolate from previous to stored current
                         prev_value = fcurve.evaluate(previous_frame)
@@ -1423,7 +1598,8 @@ def update_tween(self, context):
                                 current_value = fcurve.evaluate(current_frame)
                         else:
                             current_value = fcurve.evaluate(current_frame)
-                        interpolated_value = (1 - factor) * prev_value + factor * current_value
+                        interpolated_value = (
+                            1 - factor) * prev_value + factor * current_value
                     else:
                         # Only next key exists - interpolate from stored current to next
                         next_value = fcurve.evaluate(next_frame)
@@ -1436,7 +1612,8 @@ def update_tween(self, context):
                                 current_value = fcurve.evaluate(current_frame)
                         else:
                             current_value = fcurve.evaluate(current_frame)
-                        interpolated_value = (1 - factor) * current_value + factor * next_value
+                        interpolated_value = (
+                            1 - factor) * current_value + factor * next_value
                     interpolated_values.append(interpolated_value)
 
                 # Apply interpolated values to bone
@@ -1480,7 +1657,7 @@ def update_tween(self, context):
 
                 previous_frame, next_frame = find_keyframe_range(
                     obj_fcurves, current_frame)
-                
+
                 # If no keys found, skip
                 if previous_frame is None and next_frame is None:
                     continue
@@ -1492,17 +1669,20 @@ def update_tween(self, context):
                         # Both keys exist - normal interpolation
                         prev_value = fcurve.evaluate(previous_frame)
                         next_value = fcurve.evaluate(next_frame)
-                        interpolated_value = (1 - factor) * prev_value + factor * next_value
+                        interpolated_value = (
+                            1 - factor) * prev_value + factor * next_value
                     elif previous_frame is not None:
                         # Only previous key exists - interpolate from previous to current
                         prev_value = fcurve.evaluate(previous_frame)
                         current_value = fcurve.evaluate(current_frame)
-                        interpolated_value = (1 - factor) * prev_value + factor * current_value
+                        interpolated_value = (
+                            1 - factor) * prev_value + factor * current_value
                     else:
                         # Only next key exists - interpolate from current to next
                         current_value = fcurve.evaluate(current_frame)
                         next_value = fcurve.evaluate(next_frame)
-                        interpolated_value = (1 - factor) * current_value + factor * next_value
+                        interpolated_value = (
+                            1 - factor) * current_value + factor * next_value
                     interpolated_values.append(interpolated_value)
 
                 # Apply interpolated values to object
@@ -1837,13 +2017,13 @@ def copy_rig_drivers():
 def register():
     # Register texturing tools
     texturing_tools.register()
-    
+
     # Register animation transfer
     animation_transfer.register()
-    
+
     # Register empty from vertices
     empty_from_vertices.register()
-    
+
     # Register collection display tools
     collection_display.register()
 
@@ -1852,7 +2032,7 @@ def register():
 
     # Register render tools
     render_tools.register()
-    
+
     # Register our operators (only if not already registered)
     if not hasattr(bpy.types, 'ANIM_OT_reset_tween_stored_pose'):
         bpy.utils.register_class(reset_tween_stored_pose)
@@ -1898,6 +2078,8 @@ def register():
         bpy.utils.register_class(select_animated_objects)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_delete_animation_actions'):
         bpy.utils.register_class(delete_animation_actions)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_mirror_modifier'):
+        bpy.utils.register_class(add_mirror_modifier)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_apply_mirror_modifiers'):
         bpy.utils.register_class(apply_mirror_modifiers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
@@ -1908,23 +2090,35 @@ def register():
         bpy.utils.register_class(mirror_rig_drivers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):
         bpy.utils.register_class(bake_gp_objects)
-    if not hasattr(bpy.types, 'VIEW3D_PT_leo_tools'):
-        bpy.utils.register_class(CustomToolboxPanel)
+    if not hasattr(bpy.types, 'VIEW3D_PT_leo_texturing'):
+        bpy.utils.register_class(TexturingPanel)
+    if not hasattr(bpy.types, 'VIEW3D_PT_leo_rigging'):
+        bpy.utils.register_class(RiggingPanel)
+    if not hasattr(bpy.types, 'VIEW3D_PT_leo_modeling'):
+        bpy.utils.register_class(ModelingPanel)
+    if not hasattr(bpy.types, 'VIEW3D_PT_leo_display'):
+        bpy.utils.register_class(DisplayPanel)
+    if not hasattr(bpy.types, 'VIEW3D_PT_leo_render_settings'):
+        bpy.utils.register_class(RenderSettingsPanel)
     if not hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
         bpy.utils.register_class(AnimToolsPanel)
-    
+
     # Register shape key operators (only if not already registered)
     if not hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
-        bpy.utils.register_class(corrective_shapekey.MESH_OT_create_corrective_shapekey)
+        bpy.utils.register_class(
+            corrective_shapekey.MESH_OT_create_corrective_shapekey)
     if not hasattr(bpy.types, 'MESH_OT_create_intermediate_shapekey'):
-        bpy.utils.register_class(intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
+        bpy.utils.register_class(
+            intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
     if not hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
-        bpy.utils.register_class(position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
+        bpy.utils.register_class(
+            position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
     if not hasattr(bpy.types, 'MESH_OT_mirror_shapekeys_and_drivers'):
-        bpy.utils.register_class(mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
+        bpy.utils.register_class(
+            mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
     if not hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
         bpy.utils.register_class(combo_shapekey.MESH_OT_create_combo_shapekey)
-    
+
     bpy.types.Scene.tween_machine_percentage = bpy.props.FloatProperty(
         name="Percentage",
         description="Percentage between previous and next keyframes",
@@ -1933,7 +2127,7 @@ def register():
         max=100.0,
         subtype='PERCENTAGE',
         update=update_tween)
-    
+
     bpy.types.Scene.tween_stored_pose = bpy.props.StringProperty(
         name="Stored Pose",
         description="JSON data storing the initial pose for tweening",
@@ -1986,6 +2180,8 @@ def unregister():
         bpy.utils.unregister_class(select_animated_objects)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_delete_animation_actions'):
         bpy.utils.unregister_class(delete_animation_actions)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_add_mirror_modifier'):
+        bpy.utils.unregister_class(add_mirror_modifier)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_apply_mirror_modifiers'):
         bpy.utils.unregister_class(apply_mirror_modifiers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
@@ -1996,17 +2192,25 @@ def unregister():
         bpy.utils.unregister_class(mirror_rig_drivers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):
         bpy.utils.unregister_class(bake_gp_objects)
-    if hasattr(bpy.types, 'VIEW3D_PT_leo_tools'):
-        bpy.utils.unregister_class(CustomToolboxPanel)
+    if hasattr(bpy.types, 'VIEW3D_PT_leo_texturing'):
+        bpy.utils.unregister_class(TexturingPanel)
+    if hasattr(bpy.types, 'VIEW3D_PT_leo_rigging'):
+        bpy.utils.unregister_class(RiggingPanel)
+    if hasattr(bpy.types, 'VIEW3D_PT_leo_modeling'):
+        bpy.utils.unregister_class(ModelingPanel)
+    if hasattr(bpy.types, 'VIEW3D_PT_leo_display'):
+        bpy.utils.unregister_class(DisplayPanel)
+    if hasattr(bpy.types, 'VIEW3D_PT_leo_render_settings'):
+        bpy.utils.unregister_class(RenderSettingsPanel)
     if hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
         bpy.utils.unregister_class(AnimToolsPanel)
-    
+
     # Unregister animation transfer
     animation_transfer.unregister()
-    
+
     # Unregister empty from vertices
     empty_from_vertices.unregister()
-    
+
     # Unregister collection display tools
     collection_display.unregister()
 
@@ -2015,19 +2219,24 @@ def unregister():
 
     # Unregister render tools
     render_tools.unregister()
-    
+
     # Unregister shape key operators (only if registered)
     if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
-        bpy.utils.unregister_class(corrective_shapekey.MESH_OT_create_corrective_shapekey)
+        bpy.utils.unregister_class(
+            corrective_shapekey.MESH_OT_create_corrective_shapekey)
     if hasattr(bpy.types, 'MESH_OT_create_intermediate_shapekey'):
-        bpy.utils.unregister_class(intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
+        bpy.utils.unregister_class(
+            intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
     if hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
-        bpy.utils.unregister_class(position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
+        bpy.utils.unregister_class(
+            position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
     if hasattr(bpy.types, 'MESH_OT_mirror_shapekeys_and_drivers'):
-        bpy.utils.unregister_class(mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
+        bpy.utils.unregister_class(
+            mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
     if hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
-        bpy.utils.unregister_class(combo_shapekey.MESH_OT_create_combo_shapekey)
-    
+        bpy.utils.unregister_class(
+            combo_shapekey.MESH_OT_create_combo_shapekey)
+
     # Delete scene properties (only if they exist)
     if hasattr(bpy.types.Scene, 'tween_machine_percentage'):
         del bpy.types.Scene.tween_machine_percentage
