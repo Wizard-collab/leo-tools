@@ -1196,6 +1196,20 @@ class smart_bake_textures(bpy.types.Operator):
             original_active = context.view_layer.objects.active
             original_selected = list(context.selected_objects)
             temp_bake_object = None
+            restricted_states = {}
+
+            def _make_selectable(obj):
+                # obj.select_set() silently fails on hidden/unselectable
+                # objects, which then leads to "No valid selected objects".
+                state = {}
+                if obj.hide_get():
+                    state['hide'] = True
+                    obj.hide_set(False)
+                if obj.hide_select:
+                    state['hide_select'] = True
+                    obj.hide_select = False
+                if state:
+                    restricted_states[obj.name] = state
 
             try:
                 context.scene.render.engine = 'CYCLES'
@@ -1205,6 +1219,9 @@ class smart_bake_textures(bpy.types.Operator):
                         context.scene.cycles.use_denoising = False
                     if hasattr(context.scene.cycles, 'use_preview_denoising'):
                         context.scene.cycles.use_preview_denoising = False
+
+                for obj in selected_meshes:
+                    _make_selectable(obj)
 
                 if len(selected_meshes) > 1:
                     temp_bake_object = self._build_temp_bake_object(
@@ -1217,12 +1234,18 @@ class smart_bake_textures(bpy.types.Operator):
                 bpy.ops.object.select_all(action='DESELECT')
                 for obj in bake_targets:
                     if obj and obj.name in bpy.data.objects:
+                        _make_selectable(obj)
                         obj.select_set(True)
                 if bake_targets and bake_targets[0] and bake_targets[0].name in bpy.data.objects:
                     context.view_layer.objects.active = bake_targets[0]
                 else:
                     self.report(
                         {'ERROR'}, "No valid object available for baking")
+                    return {'CANCELLED'}
+
+                if not context.selected_objects:
+                    self.report(
+                        {'ERROR'}, "Could not select the object(s) to bake (they may be hidden or excluded from the view layer)")
                     return {'CANCELLED'}
 
                 for map_type in ordered_requested_map_types:
@@ -1274,6 +1297,15 @@ class smart_bake_textures(bpy.types.Operator):
                     context.scene.cycles.use_denoising = original_use_denoising
                 if original_use_preview_denoising is not None and hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_preview_denoising'):
                     context.scene.cycles.use_preview_denoising = original_use_preview_denoising
+
+                for obj_name, state in restricted_states.items():
+                    obj = bpy.data.objects.get(obj_name)
+                    if not obj:
+                        continue
+                    if state.get('hide'):
+                        obj.hide_set(True)
+                    if state.get('hide_select'):
+                        obj.hide_select = True
 
                 bpy.ops.object.select_all(action='DESELECT')
                 for obj in original_selected:

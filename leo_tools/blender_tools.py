@@ -11,6 +11,43 @@ from leo_tools import animation_transfer
 from leo_tools import empty_from_vertices
 from leo_tools import collection_display
 from leo_tools import bake_tools
+from leo_tools import render_tools
+
+
+def get_action_fcurves(action, id_data=None):
+    """Return the F-Curves of an action, compatible with both the legacy
+    Action API (action.fcurves, Blender < 5.0) and the layered/slotted
+    Action system (channelbags), which fully replaced it in Blender 5.0."""
+    if action is None:
+        return []
+
+    # Legacy API - still present on Blender versions before 5.0
+    if hasattr(action, "fcurves"):
+        return list(action.fcurves)
+
+    # Blender 5.0+: action.fcurves was removed, fcurves now live on
+    # per-slot channelbags (bpy_extras.anim_utils helpers)
+    try:
+        from bpy_extras import anim_utils
+    except ImportError:
+        return []
+
+    action_slot = None
+    if id_data is not None and getattr(id_data, "animation_data", None):
+        action_slot = id_data.animation_data.action_slot
+
+    if action_slot is not None:
+        channelbag = anim_utils.action_get_channelbag_for_slot(action, action_slot)
+        return list(channelbag.fcurves) if channelbag else []
+
+    # No specific slot known - gather fcurves from every channelbag
+    fcurves = []
+    for layer in action.layers:
+        for strip in layer.strips:
+            if strip.type == 'KEYFRAME':
+                for channelbag in strip.channelbags:
+                    fcurves.extend(channelbag.fcurves)
+    return fcurves
 
 
 class CustomToolboxPanel(bpy.types.Panel):
@@ -76,6 +113,8 @@ class CustomToolboxPanel(bpy.types.Panel):
         layout.operator("leo_tools.fixed_threads",
                         text="Set fixed threads to 16")
         layout.operator("leo_tools.threads_all", text="Use all threads")
+        layout.operator("leo_tools.set_all_passepartout_opacity",
+                        text="Set passepartout opacity to 1")
         layout.label(text="Utils")
         layout.operator("leo_tools.add_subdiv",
                         text="Add subdivision to selection")
@@ -250,7 +289,7 @@ class convert_rig_interpolation(bpy.types.Operator):
         bezier_count = 0
         total_keys = 0
         
-        for fcurve in action.fcurves:
+        for fcurve in get_action_fcurves(action, obj):
             for keyframe in fcurve.keyframe_points:
                 total_keys += 1
                 if keyframe.interpolation == 'CONSTANT':
@@ -272,7 +311,7 @@ class convert_rig_interpolation(bpy.types.Operator):
         
         # Convert all keyframes
         converted = 0
-        for fcurve in action.fcurves:
+        for fcurve in get_action_fcurves(action, obj):
             for keyframe in fcurve.keyframe_points:
                 if keyframe.interpolation != target_interpolation:
                     keyframe.interpolation = target_interpolation
@@ -987,6 +1026,17 @@ class create_checker(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class set_all_passepartout_opacity(bpy.types.Operator):
+    bl_idname = "leo_tools.set_all_passepartout_opacity"
+    bl_label = "Set all camera passepartout opacity to 1"
+    bl_description = "Set the passepartout opacity to 1 on every camera in the file"
+
+    def execute(self, context):
+        count = set_camera_passepartout_opacity()
+        self.report({'INFO'}, f"Set passepartout opacity to 1 on {count} camera(s)")
+        return {'FINISHED'}
+
+
 class mirror_rig_drivers(bpy.types.Operator):
     bl_idname = "leo_tools.mirror_rig_drivers"
     bl_label = "Mirror the rig drivers"
@@ -1313,8 +1363,15 @@ def update_tween(self, context):
 
         action = armature.animation_data.action
         selected_bones = [
-            bone for bone in armature.pose.bones if bone.bone.select]
-        
+            bone for bone in armature.pose.bones if bone.select]
+
+        # Gather and index all fcurves once instead of re-scanning them
+        # for every bone/property combination (this was the main cause of
+        # lag, especially with the Blender 5.0 channelbag-based lookup).
+        fcurves_by_path = {}
+        for fc in get_action_fcurves(action, armature):
+            fcurves_by_path.setdefault(fc.data_path, []).append(fc)
+
         # Store initial pose if not already stored
         if not stored_data:
             stored_data = {"armature": armature.name, "bones": {}}
@@ -1335,8 +1392,7 @@ def update_tween(self, context):
                 data_path = f'pose.bones["{bone_name}"].{data_path_base}'
 
                 # Find fcurves for this bone's property
-                bone_fcurves = [
-                    fc for fc in action.fcurves if fc.data_path == data_path]
+                bone_fcurves = fcurves_by_path.get(data_path)
                 if not bone_fcurves:
                     continue
 
@@ -1410,10 +1466,15 @@ def update_tween(self, context):
 
             action = obj.animation_data.action
 
+            # Gather and index all fcurves once instead of re-scanning
+            # them for every property (see note in the pose-bone branch above).
+            fcurves_by_path = {}
+            for fc in get_action_fcurves(action, obj):
+                fcurves_by_path.setdefault(fc.data_path, []).append(fc)
+
             # Process location, rotation, and scale for each object
             for data_path in ["location", "rotation_euler", "rotation_quaternion", "scale"]:
-                obj_fcurves = [
-                    fc for fc in action.fcurves if fc.data_path == data_path]
+                obj_fcurves = fcurves_by_path.get(data_path)
                 if not obj_fcurves:
                     continue
 
@@ -1509,7 +1570,7 @@ def align_object_to_bone():
         selected_objects.remove(armature)
         object_to_align = selected_objects[0]
         selected_bones = [
-            bone for bone in armature.pose.bones if bone.bone.select]
+            bone for bone in armature.pose.bones if bone.select]
 
         if selected_bones:
             # Get the first selected bone (if multiple are selected, it uses the first one)
@@ -1538,7 +1599,7 @@ def align_bn_to_bn():
         armature = bpy.context.object
         active_pose_bone = armature.pose.bones[armature.data.bones.active.name]
         selected_bones = [
-            bone for bone in armature.pose.bones if bone.bone.select]
+            bone for bone in armature.pose.bones if bone.select]
         selected_bones.remove(
             bpy.data.objects[armature.name].pose.bones[active_pose_bone.name])
 
@@ -1554,9 +1615,11 @@ def align_bn_to_bn():
     else:
         armature = bpy.context.object
         active_bone = armature.data.bones[armature.data.bones.active.name]
-        selected_bones = [bone for bone in armature.data.bones if bone.select]
-        selected_bones.remove(
-            bpy.data.objects[armature.name].data.bones[active_bone.name])
+        selected_bones = [
+            armature.data.bones[pose_bone.name]
+            for pose_bone in armature.pose.bones if pose_bone.select]
+        if active_bone in selected_bones:
+            selected_bones.remove(active_bone)
 
         if selected_bones:
             # Get the first selected bone (if multiple are selected, it uses the first one)
@@ -1621,6 +1684,15 @@ def set_fixed_thread():
 
 def set_thread_all():
     bpy.context.scene.render.threads_mode = 'AUTO'
+
+
+def set_camera_passepartout_opacity(opacity=1.0):
+    """Set passepartout_alpha to opacity on every camera data-block, return the count updated."""
+    count = 0
+    for camera in bpy.data.cameras:
+        camera.passepartout_alpha = opacity
+        count += 1
+    return count
 
 
 def refresh_viewport():
@@ -1777,6 +1849,9 @@ def register():
 
     # Register bake tools
     bake_tools.register()
+
+    # Register render tools
+    render_tools.register()
     
     # Register our operators (only if not already registered)
     if not hasattr(bpy.types, 'ANIM_OT_reset_tween_stored_pose'):
@@ -1801,6 +1876,8 @@ def register():
         bpy.utils.register_class(fixed_threads)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_threads_all'):
         bpy.utils.register_class(threads_all)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_set_all_passepartout_opacity'):
+        bpy.utils.register_class(set_all_passepartout_opacity)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_checker'):
         bpy.utils.register_class(create_checker)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_subdiv'):
@@ -1887,6 +1964,8 @@ def unregister():
         bpy.utils.unregister_class(fixed_threads)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_threads_all'):
         bpy.utils.unregister_class(threads_all)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_set_all_passepartout_opacity'):
+        bpy.utils.unregister_class(set_all_passepartout_opacity)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_create_checker'):
         bpy.utils.unregister_class(create_checker)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_add_subdiv'):
@@ -1933,6 +2012,9 @@ def unregister():
 
     # Unregister bake tools
     bake_tools.unregister()
+
+    # Unregister render tools
+    render_tools.unregister()
     
     # Unregister shape key operators (only if registered)
     if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
