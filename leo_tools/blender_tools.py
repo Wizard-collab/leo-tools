@@ -2,16 +2,12 @@ import bpy
 import mathutils
 import importlib
 from leo_tools import texturing_tools
-from leo_tools import corrective_shapekey
-from leo_tools import intermediate_shapekey
-from leo_tools import position_driven_shapekey
-from leo_tools import mirror_shapekeys
-from leo_tools import combo_shapekey
 from leo_tools import animation_transfer
 from leo_tools import empty_from_vertices
 from leo_tools import collection_display
 from leo_tools import bake_tools
 from leo_tools import render_tools
+from leo_tools import rigging_tools
 
 
 def get_action_fcurves(action, id_data=None):
@@ -75,38 +71,6 @@ class TexturingPanel(bpy.types.Panel):
         layout.operator("leo_tools.remove_materials", text="Remove materials")
         layout.operator("leo_tools.create_checker",
                         text="Create new checker material")
-
-
-class RiggingPanel(bpy.types.Panel):
-    bl_label = "Rigging"
-    bl_idname = "VIEW3D_PT_leo_rigging"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "Rigging"
-
-    def draw(self, context):
-        layout = self.layout
-        layout.label(text="Drivers")
-        layout.operator("leo_tools.mirror_rig_drivers",
-                        text="Mirror rig drivers")
-        layout.separator()
-        layout.label(text="Shape Keys")
-        layout.operator("mesh.create_corrective_shapekey",
-                        text="Create Corrective Shape Key")
-        layout.operator("mesh.create_intermediate_shapekey",
-                        text="Create Intermediate Shape Key")
-        layout.operator("mesh.create_position_driven_shapekey",
-                        text="Add Position Driver")
-        layout.operator("mesh.mirror_shapekeys_and_drivers",
-                        text="Mirror Shape Keys L→R")
-        layout.operator("mesh.create_combo_shapekey",
-                        text="Create Combo Shape Key")
-        layout.separator()
-        layout.label(text="Utils")
-        layout.operator("mesh.create_empty_from_vertices",
-                        text="Empty from 3 Vertices")
-        layout.operator("leo_tools.create_cage_deform_joints",
-                        text="Create cage deform joints")
 
 
 class ModelingPanel(bpy.types.Panel):
@@ -1099,53 +1063,6 @@ class remove_all_vertex_groups(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class create_cage_deform_joints(bpy.types.Operator):
-    bl_idname = "leo_tools.create_cage_deform_joints"
-    bl_label = "Create cage deform joints"
-    bl_description = "Create a joint for each vertex of the selected mesh, named by vertex ID with _CAGE_DEFORM suffix"
-
-    def execute(self, context):
-        obj = context.active_object
-        if not obj or obj.type != 'MESH':
-            self.report({'ERROR'}, "Please select a mesh object")
-            return {'CANCELLED'}
-
-        mesh = obj.data
-        mesh_name = obj.name
-
-        # Create armature
-        armature_data = bpy.data.armatures.new(f"{mesh_name}_CAGE_DEFORM")
-        armature_obj = bpy.data.objects.new(
-            f"{mesh_name}_CAGE_DEFORM", armature_data)
-        context.collection.objects.link(armature_obj)
-
-        # Position armature at mesh location
-        armature_obj.location = obj.location
-        armature_obj.rotation_euler = obj.rotation_euler
-        armature_obj.scale = obj.scale
-
-        # Enter edit mode to create bones
-        context.view_layer.objects.active = armature_obj
-        bpy.ops.object.mode_set(mode='EDIT')
-
-        # Create a bone for each vertex
-        for vert in mesh.vertices:
-            bone_name = f"{vert.index}_CAGE_DEFORM"
-            bone = armature_data.edit_bones.new(bone_name)
-            # Get vertex position in world space
-            world_pos = obj.matrix_world @ vert.co
-            # Convert to armature local space
-            local_pos = armature_obj.matrix_world.inverted() @ world_pos
-            bone.head = local_pos
-            bone.tail = local_pos + mathutils.Vector((0, 0, 0.1))
-
-        bpy.ops.object.mode_set(mode='OBJECT')
-
-        self.report(
-            {'INFO'}, f"Created {len(mesh.vertices)} joints for cage deform")
-        return {'FINISHED'}
-
-
 class remove_materials(bpy.types.Operator):
     bl_idname = "leo_tools.remove_materials"
     bl_label = "Remove all materials from selected objects"
@@ -1205,16 +1122,6 @@ class set_all_passepartout_opacity(bpy.types.Operator):
         count = set_camera_passepartout_opacity()
         self.report(
             {'INFO'}, f"Set passepartout opacity to 1 on {count} camera(s)")
-        return {'FINISHED'}
-
-
-class mirror_rig_drivers(bpy.types.Operator):
-    bl_idname = "leo_tools.mirror_rig_drivers"
-    bl_label = "Mirror the rig drivers"
-    bl_description = "Mirror the rig drivers"
-
-    def execute(self, context):
-        copy_rig_drivers()
         return {'FINISHED'}
 
 
@@ -1965,55 +1872,6 @@ def remove_shaders():
             obj.data.materials.clear()
 
 
-def copy_pose_drivers():
-    armature = bpy.context.object
-    for fcurve in (armature.animation_data.drivers):
-        if '_R' in fcurve.data_path:
-            continue
-        new_fcurve = armature.driver_add(fcurve.data_path.replace('_L', '_R'))
-        copy_fcurve_properties(fcurve, new_fcurve)
-
-
-def copy_armature_data_drivers():
-    armature = bpy.context.object
-    armature_data = armature.data
-    bones_with_hide_drivers = []
-    if armature_data.animation_data and armature_data.animation_data.drivers:
-        for fcurve in armature_data.animation_data.drivers:
-            if '_R' in fcurve.data_path:
-                continue
-            new_fcurve = armature_data.driver_add(
-                fcurve.data_path.replace('_L', '_R'))
-            copy_fcurve_properties(fcurve, new_fcurve)
-
-
-def copy_fcurve_properties(fcurve, new_fcurve):
-
-    while new_fcurve.driver.variables:
-        new_fcurve.driver.variables.remove(new_fcurve.driver.variables[0])
-
-    for var in fcurve.driver.variables:
-        print(var)
-
-        new_var = new_fcurve.driver.variables.new()
-        new_var.name = var.name
-        new_var.type = var.type
-
-        for i, target in enumerate(var.targets):
-            new_var_target = new_var.targets[i]
-            new_var_target.id = target.id
-            new_var_target.data_path = target.data_path.replace('_L', '_R')
-            new_var_target.bone_target = target.bone_target.replace('_L', '_R')
-
-    new_fcurve.driver.type = fcurve.driver.type
-    new_fcurve.driver.expression = fcurve.driver.expression
-
-
-def copy_rig_drivers():
-    copy_pose_drivers()
-    copy_armature_data_drivers()
-
-
 def register():
     # Register texturing tools
     texturing_tools.register()
@@ -2084,16 +1942,10 @@ def register():
         bpy.utils.register_class(apply_mirror_modifiers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
         bpy.utils.register_class(remove_all_vertex_groups)
-    if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
-        bpy.utils.register_class(create_cage_deform_joints)
-    if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
-        bpy.utils.register_class(mirror_rig_drivers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):
         bpy.utils.register_class(bake_gp_objects)
     if not hasattr(bpy.types, 'VIEW3D_PT_leo_texturing'):
         bpy.utils.register_class(TexturingPanel)
-    if not hasattr(bpy.types, 'VIEW3D_PT_leo_rigging'):
-        bpy.utils.register_class(RiggingPanel)
     if not hasattr(bpy.types, 'VIEW3D_PT_leo_modeling'):
         bpy.utils.register_class(ModelingPanel)
     if not hasattr(bpy.types, 'VIEW3D_PT_leo_display'):
@@ -2103,21 +1955,8 @@ def register():
     if not hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
         bpy.utils.register_class(AnimToolsPanel)
 
-    # Register shape key operators (only if not already registered)
-    if not hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
-        bpy.utils.register_class(
-            corrective_shapekey.MESH_OT_create_corrective_shapekey)
-    if not hasattr(bpy.types, 'MESH_OT_create_intermediate_shapekey'):
-        bpy.utils.register_class(
-            intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
-    if not hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
-        bpy.utils.register_class(
-            position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
-    if not hasattr(bpy.types, 'MESH_OT_mirror_shapekeys_and_drivers'):
-        bpy.utils.register_class(
-            mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
-    if not hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
-        bpy.utils.register_class(combo_shapekey.MESH_OT_create_combo_shapekey)
+    # Register rigging tools (panel, operators, shape key modules)
+    rigging_tools.register()
 
     bpy.types.Scene.tween_machine_percentage = bpy.props.FloatProperty(
         name="Percentage",
@@ -2186,16 +2025,10 @@ def unregister():
         bpy.utils.unregister_class(apply_mirror_modifiers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_vertex_groups'):
         bpy.utils.unregister_class(remove_all_vertex_groups)
-    if hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
-        bpy.utils.unregister_class(create_cage_deform_joints)
-    if hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
-        bpy.utils.unregister_class(mirror_rig_drivers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_merge_gp_objects'):
         bpy.utils.unregister_class(bake_gp_objects)
     if hasattr(bpy.types, 'VIEW3D_PT_leo_texturing'):
         bpy.utils.unregister_class(TexturingPanel)
-    if hasattr(bpy.types, 'VIEW3D_PT_leo_rigging'):
-        bpy.utils.unregister_class(RiggingPanel)
     if hasattr(bpy.types, 'VIEW3D_PT_leo_modeling'):
         bpy.utils.unregister_class(ModelingPanel)
     if hasattr(bpy.types, 'VIEW3D_PT_leo_display'):
@@ -2220,22 +2053,8 @@ def unregister():
     # Unregister render tools
     render_tools.unregister()
 
-    # Unregister shape key operators (only if registered)
-    if hasattr(bpy.types, 'MESH_OT_create_corrective_shapekey'):
-        bpy.utils.unregister_class(
-            corrective_shapekey.MESH_OT_create_corrective_shapekey)
-    if hasattr(bpy.types, 'MESH_OT_create_intermediate_shapekey'):
-        bpy.utils.unregister_class(
-            intermediate_shapekey.MESH_OT_create_intermediate_shapekey)
-    if hasattr(bpy.types, 'MESH_OT_create_position_driven_shapekey'):
-        bpy.utils.unregister_class(
-            position_driven_shapekey.MESH_OT_create_position_driven_shapekey)
-    if hasattr(bpy.types, 'MESH_OT_mirror_shapekeys_and_drivers'):
-        bpy.utils.unregister_class(
-            mirror_shapekeys.MESH_OT_mirror_shapekeys_and_drivers)
-    if hasattr(bpy.types, 'MESH_OT_create_combo_shapekey'):
-        bpy.utils.unregister_class(
-            combo_shapekey.MESH_OT_create_combo_shapekey)
+    # Unregister rigging tools (panel, operators, shape key modules)
+    rigging_tools.unregister()
 
     # Delete scene properties (only if they exist)
     if hasattr(bpy.types.Scene, 'tween_machine_percentage'):
