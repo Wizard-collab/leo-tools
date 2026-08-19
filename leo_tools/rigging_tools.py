@@ -37,14 +37,20 @@ class RiggingPanel(bpy.types.Panel):
                         text="Empty from 3 Vertices")
         layout.operator("leo_tools.create_cage_deform_joints",
                         text="Create cage deform joints")
+        layout.operator("leo_tools.organize_bones",
+                        text="Organize bones (deform + collections)")
         layout.separator()
         layout.label(text="Bone Constraints")
         layout.operator("leo_tools.add_copy_transforms_constraint",
                         text="Add copy transforms constraint")
         layout.operator("leo_tools.add_child_of_constraint",
                         text="Add child of constraint")
+        layout.operator("leo_tools.reset_child_of_inverse",
+                        text="Reset child of inverse")
         layout.operator("leo_tools.copy_bone_shape",
                         text="Copy controller shape")
+        layout.operator("leo_tools.copy_specific_constraints",
+                        text="Copy specific constraints")
         layout.operator("leo_tools.symmetrize_bone_constraints",
                         text="Symmetrize bone constraints")
         layout.operator("leo_tools.blend_bone_chain",
@@ -177,6 +183,77 @@ class add_child_of_constraint(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def reset_child_of_inverses(armature_obj, bones, context):
+    """Recompute the Set Inverse matrix of every Child Of constraint owned by `bones`.
+
+    Every constraint on the owner bones AND their Child Of targets is muted first,
+    so the inverse is computed against a clean, un-constrained transform (matching
+    Blender's clear+set inverse behaviour), then all constraints are restored.
+    Returns the number of Child Of constraints reset."""
+    pose_bones = armature_obj.pose.bones
+
+    affected_bones = set()
+    child_of_cons = []
+    for bone in bones:
+        for con in bone.constraints:
+            if con.type != 'CHILD_OF' or not con.target:
+                continue
+            target_bone = (pose_bones.get(con.subtarget)
+                            if con.target == armature_obj else None)
+            child_of_cons.append((con, target_bone))
+            affected_bones.add(bone)
+            if target_bone is not None:
+                affected_bones.add(target_bone)
+
+    if not child_of_cons:
+        return 0
+
+    # Mute so the inverse is computed against the clean, un-constrained
+    # transform, then force a depsgraph update before reading it back.
+    original_enabled = {}
+    for bone in affected_bones:
+        for con in bone.constraints:
+            original_enabled[con] = con.enabled
+            con.enabled = False
+    context.view_layer.update()
+
+    for con, target_bone in child_of_cons:
+        if target_bone is not None:
+            con.inverse_matrix = target_bone.matrix.inverted()
+        else:
+            con.inverse_matrix = con.target.matrix_world.inverted()
+
+    for con, enabled in original_enabled.items():
+        con.enabled = enabled
+
+    return len(child_of_cons)
+
+
+class reset_child_of_inverse(bpy.types.Operator):
+    bl_idname = "leo_tools.reset_child_of_inverse"
+    bl_label = "Reset Child Of Inverse"
+    bl_description = "Mute every constraint on the selected bone(s) and their Child Of target(s), reset the inverse, then restore all constraints"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'POSE' and context.selected_pose_bones
+
+    def execute(self, context):
+        armature_obj = context.active_object
+        reset_count = reset_child_of_inverses(
+            armature_obj, context.selected_pose_bones, context)
+
+        if reset_count == 0:
+            self.report(
+                {'WARNING'}, "No Child Of constraint found on the selected bone(s)")
+            return {'CANCELLED'}
+
+        self.report(
+            {'INFO'}, f"Reset inverse on {reset_count} Child Of constraint(s)")
+        return {'FINISHED'}
+
+
 class blend_bone_chain(bpy.types.Operator):
     bl_idname = "leo_tools.blend_bone_chain"
     bl_label = "Blend Chain Between Two Bones"
@@ -215,6 +292,8 @@ class blend_bone_chain(bpy.types.Operator):
         stp_names = []
         for bone_name, t in middle_names:
             base_name, side_suffix = split_side_suffix(bone_name)
+            # Replace a leading CTRL_ with STP_ instead of stacking both prefixes.
+            base_name = base_name.removeprefix('CTRL_')
             stp_names.extend([
                 f"STP_{base_name}_ROOT_PROXY{side_suffix}",
                 f"STP_{base_name}_TIP_PROXY{side_suffix}",
@@ -229,6 +308,7 @@ class blend_bone_chain(bpy.types.Operator):
         created = []
         for bone_name, t in middle_names:
             base_name, side_suffix = split_side_suffix(bone_name)
+            base_name = base_name.removeprefix('CTRL_')
             root_proxy_name = f"STP_{base_name}_ROOT_PROXY{side_suffix}"
             tip_proxy_name = f"STP_{base_name}_TIP_PROXY{side_suffix}"
             blend_name = f"STP_{base_name}_BLEND{side_suffix}"
@@ -321,6 +401,56 @@ class blend_bone_chain(bpy.types.Operator):
 
         self.report(
             {'INFO'}, f"Blended {count} bone(s) between '{root_name}' and '{tip_name}'")
+        return {'FINISHED'}
+
+
+class organize_bones(bpy.types.Operator):
+    bl_idname = "leo_tools.organize_bones"
+    bl_label = "Organize Bones"
+    bl_description = ("Enable deform only on bones with 'DEF_' in their name, and sort every "
+                       "bone into a collection named after its prefix (DEF, STP, CTRL, etc.)")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and context.active_object.type == 'ARMATURE'
+
+    def execute(self, context):
+        armature_data = context.active_object.data
+        has_collections = hasattr(armature_data, 'collections')
+
+        prefix_collections = {}
+        deform_count = 0
+        sorted_count = 0
+
+        for bone in armature_data.bones:
+            bone.use_deform = 'DEF_' in bone.name
+            if bone.use_deform:
+                deform_count += 1
+
+            if not has_collections:
+                continue
+            prefix = bone.name.split('_', 1)[0]
+            if not prefix:
+                continue
+
+            collection = prefix_collections.get(prefix)
+            if collection is None:
+                collection = armature_data.collections.get(prefix)
+                if collection is None:
+                    collection = armature_data.collections.new(prefix)
+                prefix_collections[prefix] = collection
+
+            for other in list(bone.collections):
+                if other != collection:
+                    other.unassign(bone)
+            collection.assign(bone)
+            sorted_count += 1
+
+        self.report(
+            {'INFO'},
+            f"Set deform on {deform_count} bone(s), sorted {sorted_count} bone(s) into "
+            f"{len(prefix_collections)} collection(s)")
         return {'FINISHED'}
 
 
@@ -430,6 +560,70 @@ def order_bone_chain_by_distance(selected_bones):
     return [root] + middle + [tip]
 
 
+class LEO_TOOLS_PG_constraint_toggle(bpy.types.PropertyGroup):
+    enabled: bpy.props.BoolProperty(default=True)
+
+
+class copy_specific_constraints(bpy.types.Operator):
+    bl_idname = "leo_tools.copy_specific_constraints"
+    bl_label = "Copy Specific Constraints"
+    bl_description = "Copy chosen constraints from the active bone to the other selected bones"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    constraint_toggles: bpy.props.CollectionProperty(
+        type=LEO_TOOLS_PG_constraint_toggle)
+
+    @classmethod
+    def poll(cls, context):
+        return (context.mode == 'POSE' and context.active_pose_bone
+                and context.selected_pose_bones
+                and len(context.selected_pose_bones) > 1)
+
+    def invoke(self, context, event):
+        source = context.active_pose_bone
+        if not source.constraints:
+            self.report({'WARNING'}, "Active bone has no constraints")
+            return {'CANCELLED'}
+
+        self.constraint_toggles.clear()
+        for con in source.constraints:
+            item = self.constraint_toggles.add()
+            item.name = con.name
+            item.enabled = True
+
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        for item in self.constraint_toggles:
+            layout.prop(item, "enabled", text=item.name)
+
+    def execute(self, context):
+        source = context.active_pose_bone
+        targets = [b for b in context.selected_pose_bones if b != source]
+        if not targets:
+            self.report(
+                {'ERROR'}, "Select at least two bones (active bone is the source)")
+            return {'CANCELLED'}
+
+        selected_names = {
+            item.name for item in self.constraint_toggles if item.enabled}
+        if not selected_names:
+            self.report({'WARNING'}, "No constraint selected to copy")
+            return {'CANCELLED'}
+
+        copied = 0
+        for target in targets:
+            for con in source.constraints:
+                if con.name in selected_names:
+                    copy_bone_constraint(con, target)
+                    copied += 1
+
+        self.report(
+            {'INFO'}, f"Copied {copied} constraint(s) to {len(targets)} bone(s)")
+        return {'FINISHED'}
+
+
 class copy_bone_shape(bpy.types.Operator):
     bl_idname = "leo_tools.copy_bone_shape"
     bl_label = "Copy Controller Shape"
@@ -473,7 +667,7 @@ class copy_bone_shape(bpy.types.Operator):
         return {'FINISHED'}
 
 
-def symmetrize_constraints(armature_obj, selected_bones):
+def symmetrize_constraints(armature_obj, selected_bones, context):
     """Mirror constraints from '_L' bones (selected_bones, or all pose bones if
     None) onto their '_R' counterparts.
 
@@ -483,6 +677,7 @@ def symmetrize_constraints(armature_obj, selected_bones):
 
     mirrored_bones = 0
     mirrored_constraints = 0
+    mirrored_targets = []
 
     for source in source_bones:
         target = pose_bones.get(mirror_bone_name(source.name))
@@ -495,8 +690,10 @@ def symmetrize_constraints(armature_obj, selected_bones):
             copy_bone_constraint(con, target)
             mirrored_constraints += 1
 
-        reset_bone_constraint_inverses(armature_obj, target)
+        mirrored_targets.append(target)
         mirrored_bones += 1
+
+    reset_child_of_inverses(armature_obj, mirrored_targets, context)
 
     return len(source_bones), mirrored_bones, mirrored_constraints
 
@@ -514,7 +711,7 @@ class symmetrize_bone_constraints(bpy.types.Operator):
     def execute(self, context):
         armature_obj = context.active_object
         source_count, mirrored_bones, mirrored_constraints = symmetrize_constraints(
-            armature_obj, context.selected_pose_bones)
+            armature_obj, context.selected_pose_bones, context)
 
         if source_count == 0:
             self.report(
@@ -564,7 +761,7 @@ class symmetrize_rig(bpy.types.Operator):
 
         # Whole-rig pass, so mirror every '_L' bone rather than just the selection.
         _, mirrored_bones, mirrored_constraints = symmetrize_constraints(
-            armature_obj, None)
+            armature_obj, None, context)
         copy_rig_drivers()
 
         bpy.ops.object.mode_set(mode=original_mode)
@@ -578,21 +775,6 @@ class symmetrize_rig(bpy.types.Operator):
 def mirror_bone_name(name):
     return name.replace('_L', '_R') if name else name
 
-
-def reset_bone_constraint_inverses(armature_obj, bone):
-    """Recompute the Set Inverse matrix of any Child Of constraint on bone.
-
-    Computed directly (no bpy.ops), since the operator relies on bones.active/
-    context state that isn't reliable when looping over many bones at once."""
-    for con in bone.constraints:
-        if con.type != 'CHILD_OF' or not con.target:
-            continue
-        target_bone = (armature_obj.pose.bones.get(con.subtarget)
-                        if con.target == armature_obj else None)
-        if target_bone is not None:
-            con.inverse_matrix = target_bone.matrix.inverted()
-        else:
-            con.inverse_matrix = con.target.matrix_world.inverted()
 
 
 def copy_bone_constraint(con, target_bone):
@@ -694,14 +876,22 @@ def register():
 
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
         bpy.utils.register_class(create_cage_deform_joints)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_organize_bones'):
+        bpy.utils.register_class(organize_bones)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
         bpy.utils.register_class(mirror_rig_drivers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_copy_transforms_constraint'):
         bpy.utils.register_class(add_copy_transforms_constraint)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_child_of_constraint'):
         bpy.utils.register_class(add_child_of_constraint)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_reset_child_of_inverse'):
+        bpy.utils.register_class(reset_child_of_inverse)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_copy_bone_shape'):
         bpy.utils.register_class(copy_bone_shape)
+    if not hasattr(bpy.types, 'LEO_TOOLS_PG_constraint_toggle'):
+        bpy.utils.register_class(LEO_TOOLS_PG_constraint_toggle)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_copy_specific_constraints'):
+        bpy.utils.register_class(copy_specific_constraints)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_symmetrize_bone_constraints'):
         bpy.utils.register_class(symmetrize_bone_constraints)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_blend_bone_chain'):
@@ -723,6 +913,12 @@ def unregister():
         bpy.utils.unregister_class(symmetrize_bone_constraints)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_copy_bone_shape'):
         bpy.utils.unregister_class(copy_bone_shape)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_copy_specific_constraints'):
+        bpy.utils.unregister_class(copy_specific_constraints)
+    if hasattr(bpy.types, 'LEO_TOOLS_PG_constraint_toggle'):
+        bpy.utils.unregister_class(LEO_TOOLS_PG_constraint_toggle)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_reset_child_of_inverse'):
+        bpy.utils.unregister_class(reset_child_of_inverse)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_add_child_of_constraint'):
         bpy.utils.unregister_class(add_child_of_constraint)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_add_copy_transforms_constraint'):
@@ -731,6 +927,8 @@ def unregister():
         bpy.utils.unregister_class(mirror_rig_drivers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
         bpy.utils.unregister_class(create_cage_deform_joints)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_organize_bones'):
+        bpy.utils.unregister_class(organize_bones)
 
     combo_shapekey.unregister()
     mirror_shapekeys.unregister()
