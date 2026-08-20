@@ -39,6 +39,10 @@ class RiggingPanel(bpy.types.Panel):
                         text="Create cage deform joints")
         layout.operator("leo_tools.organize_bones",
                         text="Organize bones (deform + collections)")
+        layout.operator("leo_tools.duplicate_mirror_object",
+                        text="Duplicate + mirror (world origin)")
+        layout.operator("leo_tools.mirror_vertex_weights",
+                        text="Mirror vertex weights")
         layout.separator()
         layout.label(text="Bone Constraints")
         layout.operator("leo_tools.add_copy_transforms_constraint",
@@ -105,6 +109,107 @@ class create_cage_deform_joints(bpy.types.Operator):
 
         self.report(
             {'INFO'}, f"Created {len(mesh.vertices)} joints for cage deform")
+        return {'FINISHED'}
+
+
+class duplicate_mirror_object(bpy.types.Operator):
+    bl_idname = "leo_tools.duplicate_mirror_object"
+    bl_label = "Duplicate + Mirror Object"
+    bl_description = "Duplicate selected object(s) on the +X side and mirror them to -X across the world origin"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.selected_objects)
+
+    def execute(self, context):
+        mirror_matrix = mathutils.Matrix.Scale(-1, 4, (1, 0, 0))
+        source_objects = [
+            obj for obj in context.selected_objects
+            if obj.matrix_world.translation.x > 0]
+
+        if not source_objects:
+            self.report(
+                {'WARNING'}, "No selected object is on the +X side")
+            return {'CANCELLED'}
+
+        created = []
+        for obj in source_objects:
+            new_obj = obj.copy()
+            if obj.data:
+                new_obj.data = obj.data.copy()
+            new_obj.name = f"{obj.name}_mirror"
+            # Parenting carries a matrix_parent_inverse computed for the
+            # original transform, which would offset the mirrored copy.
+            new_obj.parent = None
+
+            collections = obj.users_collection or (context.collection,)
+            for coll in collections:
+                coll.objects.link(new_obj)
+
+            new_obj.matrix_world = mirror_matrix @ obj.matrix_world
+            created.append(new_obj)
+
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        for new_obj in created:
+            new_obj.select_set(True)
+        if created:
+            context.view_layer.objects.active = created[-1]
+
+        self.report(
+            {'INFO'}, f"Duplicated and mirrored {len(created)} object(s) from +X to -X")
+        return {'FINISHED'}
+
+
+class mirror_vertex_weights(bpy.types.Operator):
+    bl_idname = "leo_tools.mirror_vertex_weights"
+    bl_label = "Mirror Vertex Weights"
+    bl_description = "Mirror all vertex group weights from one half of the mesh onto the other, across X=0"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    direction: bpy.props.EnumProperty(
+        name="Direction",
+        description="Which half receives the mirrored weights",
+        items=[
+            ('NEGATIVE_TO_POSITIVE', "-X to +X",
+             "Copy weights from the -X side onto the +X side"),
+            ('POSITIVE_TO_NEGATIVE', "+X to -X",
+             "Copy weights from the +X side onto the -X side"),
+        ],
+        default='POSITIVE_TO_NEGATIVE',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.type == 'MESH' and obj.vertex_groups
+
+    def execute(self, context):
+        obj = context.active_object
+        mesh = obj.data
+        original_mode = obj.mode
+        original_mask = mesh.use_paint_mask_vertex
+
+        # The mirror operator only overwrites selected vertices, so select the
+        # destination half instead of going through edit mode + mask by hand.
+        select_positive = self.direction == 'NEGATIVE_TO_POSITIVE'
+        for v in mesh.vertices:
+            v.select = (v.co.x > 0) if select_positive else (v.co.x < 0)
+
+        if obj.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
+        mesh.use_paint_mask_vertex = True
+        bpy.ops.object.vertex_group_mirror(
+            all_groups=True, use_topology=False)
+        mesh.use_paint_mask_vertex = original_mask
+        bpy.ops.object.mode_set(mode='OBJECT')
+        if original_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode=original_mode)
+
+        self.report(
+            {'INFO'}, f"Mirrored vertex weights ({self.direction.replace('_', ' ').lower()})")
         return {'FINISHED'}
 
 
@@ -408,18 +513,49 @@ class organize_bones(bpy.types.Operator):
     bl_idname = "leo_tools.organize_bones"
     bl_label = "Organize Bones"
     bl_description = ("Enable deform only on bones with 'DEF_' in their name, and sort every "
-                       "bone into a collection named after its prefix (DEF, STP, CTRL, etc.)")
+                       "bone into a collection named after its prefix (DEF, STP, CTRL, etc.) "
+                       "with a nested sub-collection named after the part that follows it "
+                       "(eyes, body, etc.), further split into L/R sub-collections when the "
+                       "bone name ends in '_L' or '_R'")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
         return context.active_object and context.active_object.type == 'ARMATURE'
 
+    @staticmethod
+    def remove_empty_collections(armature_data):
+        # Sweep away leftover collections (e.g. old '.001'/'.002' duplicates
+        # from earlier runs) that ended up with no bones and no children,
+        # repeating since removing a leaf can empty out its parent too.
+        # collections_all is used since it includes nested collections;
+        # .collections only lists root-level ones.
+        removed_any = True
+        while removed_any:
+            removed_any = False
+            for collection in list(armature_data.collections_all):
+                if not collection.bones and not collection.children:
+                    print(f"[organize_bones] removing empty collection '{collection.name}'")
+                    armature_data.collections.remove(collection)
+                    removed_any = True
+
     def execute(self, context):
-        armature_data = context.active_object.data
+        armature_obj = context.active_object
+        # Bone collection membership only syncs when leaving edit mode, so
+        # bones/collections would look unassigned and get duplicated otherwise.
+        original_mode = armature_obj.mode
+        if original_mode == 'EDIT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        armature_data = armature_obj.data
         has_collections = hasattr(armature_data, 'collections')
 
-        prefix_collections = {}
+        print(f"[organize_bones] --- start, mode was {original_mode} ---")
+        if has_collections:
+            print(f"[organize_bones] existing collections before run: "
+                  f"{[c.name for c in armature_data.collections_all]}")
+
+        seen_names = set()
         deform_count = 0
         sorted_count = 0
 
@@ -430,27 +566,77 @@ class organize_bones(bpy.types.Operator):
 
             if not has_collections:
                 continue
-            prefix = bone.name.split('_', 1)[0]
+            tokens = bone.name.split('_')
+            prefix = tokens[0]
             if not prefix:
                 continue
 
-            collection = prefix_collections.get(prefix)
-            if collection is None:
-                collection = armature_data.collections.get(prefix)
-                if collection is None:
-                    collection = armature_data.collections.new(prefix)
-                prefix_collections[prefix] = collection
+            # Always look collections up fresh by name instead of caching
+            # BoneCollection references, since new() calls elsewhere in this
+            # loop can invalidate previously fetched python wrappers.
+            # collections_all is used since it includes nested collections;
+            # .collections only lists root-level ones, so nested part
+            # collections would never be found there and get recreated.
+            prefix_collection = armature_data.collections_all.get(prefix)
+            if prefix_collection is None:
+                prefix_collection = armature_data.collections.new(prefix)
+                print(f"[organize_bones] bone '{bone.name}': created prefix "
+                      f"collection '{prefix_collection.name}' (wanted '{prefix}')")
+            seen_names.add(prefix)
+
+            part = tokens[1] if len(tokens) > 1 and tokens[1] else None
+            # Ancestor chain the bone should belong to (e.g. DEF, DEF_eye,
+            # DEF_eye_L), so it stays visible from any level in the outliner.
+            ancestor_collections = [prefix_collection]
+            if part:
+                # Name includes the prefix so it stays armature-wide unique
+                # instead of relying on Blender's '.001' auto-renaming.
+                part_name = f"{prefix}_{part}"
+                part_collection = armature_data.collections_all.get(part_name)
+                if part_collection is None:
+                    part_collection = armature_data.collections.new(
+                        part_name, parent=prefix_collection)
+                    print(f"[organize_bones] bone '{bone.name}': created part "
+                          f"collection '{part_collection.name}' (wanted '{part_name}', "
+                          f"parent '{prefix_collection.name}')")
+                seen_names.add(part_name)
+                ancestor_collections.append(part_collection)
+
+                side = tokens[-1] if tokens[-1] in ('L', 'R') else None
+                if side:
+                    # Name includes prefix+part so it stays armature-wide unique.
+                    side_name = f"{part_name}_{side}"
+                    side_collection = armature_data.collections_all.get(side_name)
+                    if side_collection is None:
+                        side_collection = armature_data.collections.new(
+                            side_name, parent=part_collection)
+                        print(f"[organize_bones] bone '{bone.name}': created side "
+                              f"collection '{side_collection.name}' (wanted '{side_name}', "
+                              f"parent '{part_collection.name}')")
+                    seen_names.add(side_name)
+                    ancestor_collections.append(side_collection)
 
             for other in list(bone.collections):
-                if other != collection:
+                if other not in ancestor_collections:
                     other.unassign(bone)
-            collection.assign(bone)
+            for collection in ancestor_collections:
+                collection.assign(bone)
             sorted_count += 1
 
+        if has_collections:
+            print(f"[organize_bones] collections before cleanup: "
+                  f"{[(c.name, c.parent.name if c.parent else None, len(c.bones)) for c in armature_data.collections_all]}")
+            self.remove_empty_collections(armature_data)
+            print(f"[organize_bones] collections after cleanup: "
+                  f"{[(c.name, c.parent.name if c.parent else None, len(c.bones)) for c in armature_data.collections_all]}")
+
+        total_collections = len(seen_names)
         self.report(
             {'INFO'},
             f"Set deform on {deform_count} bone(s), sorted {sorted_count} bone(s) into "
-            f"{len(prefix_collections)} collection(s)")
+            f"{total_collections} collection(s)")
+        if original_mode == 'EDIT':
+            bpy.ops.object.mode_set(mode='EDIT')
         return {'FINISHED'}
 
 
@@ -876,6 +1062,10 @@ def register():
 
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
         bpy.utils.register_class(create_cage_deform_joints)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_duplicate_mirror_object'):
+        bpy.utils.register_class(duplicate_mirror_object)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_vertex_weights'):
+        bpy.utils.register_class(mirror_vertex_weights)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_organize_bones'):
         bpy.utils.register_class(organize_bones)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
@@ -927,6 +1117,10 @@ def unregister():
         bpy.utils.unregister_class(mirror_rig_drivers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):
         bpy.utils.unregister_class(create_cage_deform_joints)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_duplicate_mirror_object'):
+        bpy.utils.unregister_class(duplicate_mirror_object)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_vertex_weights'):
+        bpy.utils.unregister_class(mirror_vertex_weights)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_organize_bones'):
         bpy.utils.unregister_class(organize_bones)
 
