@@ -1,3 +1,4 @@
+import re
 import bpy
 import mathutils
 from leo_tools import corrective_shapekey
@@ -19,6 +20,8 @@ class RiggingPanel(bpy.types.Panel):
         layout.label(text="Drivers")
         layout.operator("leo_tools.mirror_rig_drivers",
                         text="Mirror rig drivers")
+        layout.operator("leo_tools.copy_bone_driver",
+                text="Copy driver to selected bones")
         layout.separator()
         layout.label(text="Shape Keys")
         layout.operator("mesh.create_corrective_shapekey",
@@ -51,8 +54,12 @@ class RiggingPanel(bpy.types.Panel):
                         text="Add child of constraint")
         layout.operator("leo_tools.reset_child_of_inverse",
                         text="Reset child of inverse")
+        layout.operator("leo_tools.retarget_shrinkwrap_constraints",
+                        text="Retarget shrinkwrap constraints")
         layout.operator("leo_tools.copy_bone_shape",
                         text="Copy controller shape")
+        layout.operator("leo_tools.cleanup_duplicate_bone_shapes",
+                        text="Clean up duplicate control shapes")
         layout.operator("leo_tools.copy_specific_constraints",
                         text="Copy specific constraints")
         layout.operator("leo_tools.symmetrize_bone_constraints",
@@ -223,6 +230,89 @@ class mirror_rig_drivers(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def pose_bone_driver_items(self, context):
+    armature_obj = context.active_object
+    source = context.active_pose_bone
+    if not armature_obj or not source or not armature_obj.animation_data:
+        return []
+
+    bone_path = source.path_from_id()
+    items = []
+    for fcurve in armature_obj.animation_data.drivers:
+        if not fcurve.data_path.startswith(bone_path):
+            continue
+        key = f"{fcurve.data_path}|{fcurve.array_index}"
+        label = fcurve.data_path.removeprefix(f"{bone_path}.")
+        if fcurve.array_index >= 0:
+            label = f"{label} [{fcurve.array_index}]"
+        items.append((key, label, f"Copy this driver from '{source.name}'"))
+    return items
+
+
+class copy_bone_driver(bpy.types.Operator):
+    bl_idname = "leo_tools.copy_bone_driver"
+    bl_label = "Copy Driver to Selected Bones"
+    bl_description = "Copy one driver from the active bone to every other selected bone"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    driver_key: bpy.props.EnumProperty(name="Driver", items=pose_bone_driver_items)
+
+    @classmethod
+    def poll(cls, context):
+        armature_obj = context.active_object
+        return (context.mode == 'POSE' and context.active_pose_bone
+                and context.selected_pose_bones
+                and len(context.selected_pose_bones) > 1
+                and armature_obj.animation_data
+                and armature_obj.animation_data.drivers)
+
+    def invoke(self, context, event):
+        if not pose_bone_driver_items(self, context):
+            self.report({'ERROR'}, "The active bone has no drivers")
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        self.layout.prop(self, "driver_key")
+
+    def execute(self, context):
+        armature_obj = context.active_object
+        source = context.active_pose_bone
+        source_path, array_index = self.driver_key.rsplit('|', 1)
+        array_index = int(array_index)
+        source_fcurve = next(
+            (fcurve for fcurve in armature_obj.animation_data.drivers
+             if fcurve.data_path == source_path and fcurve.array_index == array_index),
+            None)
+        if source_fcurve is None:
+            self.report({'ERROR'}, "The selected source driver no longer exists")
+            return {'CANCELLED'}
+
+        source_bone_path = source.path_from_id()
+        copied_count = 0
+        for target in context.selected_pose_bones:
+            if target == source:
+                continue
+            target_path = source_path.replace(
+                source_bone_path, target.path_from_id(), 1)
+            try:
+                armature_obj.driver_remove(target_path, array_index)
+            except (TypeError, ValueError):
+                try:
+                    armature_obj.driver_remove(target_path)
+                except (TypeError, ValueError):
+                    pass
+            try:
+                target_fcurve = armature_obj.driver_add(target_path, array_index)
+            except TypeError:
+                target_fcurve = armature_obj.driver_add(target_path)
+            copy_fcurve_properties(source_fcurve, target_fcurve, mirror_targets=False)
+            copied_count += 1
+
+        self.report({'INFO'}, f"Copied driver to {copied_count} bone(s)")
+        return {'FINISHED'}
+
+
 class add_copy_transforms_constraint(bpy.types.Operator):
     bl_idname = "leo_tools.add_copy_transforms_constraint"
     bl_label = "Add Copy Transforms Constraint"
@@ -356,6 +446,89 @@ class reset_child_of_inverse(bpy.types.Operator):
 
         self.report(
             {'INFO'}, f"Reset inverse on {reset_count} Child Of constraint(s)")
+        return {'FINISHED'}
+
+
+def _shrinkwrap_retarget_items(self, context):
+    old_target = getattr(self, '_old_target', None)
+    items = []
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH' and obj != old_target:
+            items.append((obj.name, obj.name, f"Retarget shrinkwraps to '{obj.name}'"))
+    return items
+
+
+class retarget_shrinkwrap_constraints(bpy.types.Operator):
+    bl_idname = "leo_tools.retarget_shrinkwrap_constraints"
+    bl_label = "Retarget Shrinkwrap Constraints"
+    bl_description = ("Select a mesh and an armature: every Shrinkwrap bone constraint "
+                       "targeting that mesh gets retargeted to another mesh you choose")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    new_target: bpy.props.EnumProperty(
+        name="New Target",
+        description="Mesh to use instead on matching Shrinkwrap constraints",
+        items=_shrinkwrap_retarget_items,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return (context.selected_objects and len(context.selected_objects) == 2
+                and any(obj.type == 'ARMATURE' for obj in context.selected_objects)
+                and any(obj.type == 'MESH' for obj in context.selected_objects))
+
+    def invoke(self, context, event):
+        armature_obj, old_target = self._get_armature_and_mesh(context)
+        if armature_obj is None or old_target is None:
+            self.report(
+                {'ERROR'}, "Select exactly one mesh and one armature")
+            return {'CANCELLED'}
+
+        self._old_target = old_target
+        if not _shrinkwrap_retarget_items(self, context):
+            self.report(
+                {'ERROR'}, "No other mesh object found to retarget to")
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        self.layout.prop(self, "new_target")
+
+    @staticmethod
+    def _get_armature_and_mesh(context):
+        armature_obj = next(
+            (obj for obj in context.selected_objects if obj.type == 'ARMATURE'), None)
+        old_target = next(
+            (obj for obj in context.selected_objects if obj.type == 'MESH'), None)
+        return armature_obj, old_target
+
+    def execute(self, context):
+        armature_obj, old_target = self._get_armature_and_mesh(context)
+        if armature_obj is None or old_target is None:
+            self.report(
+                {'ERROR'}, "Select exactly one mesh and one armature")
+            return {'CANCELLED'}
+
+        new_target = bpy.data.objects.get(self.new_target)
+        if new_target is None:
+            self.report({'ERROR'}, "Chosen replacement mesh no longer exists")
+            return {'CANCELLED'}
+
+        changed = 0
+        for bone in armature_obj.pose.bones:
+            for con in bone.constraints:
+                if con.type == 'SHRINKWRAP' and con.target == old_target:
+                    con.target = new_target
+                    changed += 1
+
+        if changed == 0:
+            self.report(
+                {'WARNING'}, f"No Shrinkwrap constraint targeting '{old_target.name}' was found")
+            return {'CANCELLED'}
+
+        self.report(
+            {'INFO'}, f"Retargeted {changed} Shrinkwrap constraint(s) from "
+            f"'{old_target.name}' to '{new_target.name}'")
         return {'FINISHED'}
 
 
@@ -844,12 +1017,83 @@ class copy_bone_shape(bpy.types.Operator):
                 if not hasattr(source, prop):
                     continue
                 value = getattr(source, prop)
-                if hasattr(value, 'copy'):
+                # custom_shape/custom_shape_transform are Object references;
+                # .copy() on those would duplicate the widget datablock
+                # instead of just pointing the target bone at the same one.
+                if prop not in ('custom_shape', 'custom_shape_transform') and hasattr(value, 'copy'):
                     value = value.copy()
                 setattr(bone, prop, value)
 
         self.report(
             {'INFO'}, f"Copied controller shape from '{source.name}' to {len(targets)} bone(s)")
+        return {'FINISHED'}
+
+
+def _is_still_used_as_shape(name):
+    for armature_obj in bpy.data.objects:
+        if armature_obj.type != 'ARMATURE' or not armature_obj.pose:
+            continue
+        for bone in armature_obj.pose.bones:
+            for prop in ('custom_shape', 'custom_shape_transform'):
+                shape_obj = getattr(bone, prop, None)
+                if shape_obj and shape_obj.name == name:
+                    return True
+    return False
+
+
+class cleanup_duplicate_bone_shapes(bpy.types.Operator):
+    bl_idname = "leo_tools.cleanup_duplicate_bone_shapes"
+    bl_label = "Clean Up Duplicate Control Shapes"
+    bl_description = ("Retarget bones using a duplicated control shape object (e.g. "
+                       "'WGT_circle.001') back to the original, then delete the duplicate")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    SHAPE_PROPS = ('custom_shape', 'custom_shape_transform')
+
+    @staticmethod
+    def _base_name(name):
+        match = re.match(r'^(.*)\.\d{3}$', name)
+        return match.group(1) if match else None
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        retargeted = 0
+        duplicate_names = set()
+
+        for armature_obj in bpy.data.objects:
+            if armature_obj.type != 'ARMATURE' or not armature_obj.pose:
+                continue
+            for bone in armature_obj.pose.bones:
+                for prop in self.SHAPE_PROPS:
+                    shape_obj = getattr(bone, prop, None)
+                    if shape_obj is None:
+                        continue
+                    base_name = self._base_name(shape_obj.name)
+                    if base_name is None:
+                        continue
+                    original = bpy.data.objects.get(base_name)
+                    if original is None or original == shape_obj:
+                        continue
+                    duplicate_names.add(shape_obj.name)
+                    setattr(bone, prop, original)
+                    retargeted += 1
+
+        deleted = 0
+        for name in duplicate_names:
+            obj = bpy.data.objects.get(name)
+            if obj is None or _is_still_used_as_shape(name):
+                continue
+            mesh_data = obj.data if obj.type == 'MESH' else None
+            bpy.data.objects.remove(obj, do_unlink=True)
+            deleted += 1
+            if mesh_data and mesh_data.users == 0:
+                bpy.data.meshes.remove(mesh_data)
+
+        self.report(
+            {'INFO'}, f"Retargeted {retargeted} bone(s), deleted {deleted} duplicate shape object(s)")
         return {'FINISHED'}
 
 
@@ -1026,7 +1270,7 @@ def copy_armature_data_drivers():
             copy_fcurve_properties(fcurve, new_fcurve)
 
 
-def copy_fcurve_properties(fcurve, new_fcurve):
+def copy_fcurve_properties(fcurve, new_fcurve, mirror_targets=True):
 
     while new_fcurve.driver.variables:
         new_fcurve.driver.variables.remove(new_fcurve.driver.variables[0])
@@ -1041,8 +1285,14 @@ def copy_fcurve_properties(fcurve, new_fcurve):
         for i, target in enumerate(var.targets):
             new_var_target = new_var.targets[i]
             new_var_target.id = target.id
-            new_var_target.data_path = target.data_path.replace('_L', '_R')
-            new_var_target.bone_target = target.bone_target.replace('_L', '_R')
+            new_var_target.data_path = target.data_path
+            new_var_target.bone_target = target.bone_target
+            new_var_target.transform_type = target.transform_type
+            new_var_target.transform_space = target.transform_space
+            new_var_target.rotation_mode = target.rotation_mode
+            if mirror_targets:
+                new_var_target.data_path = new_var_target.data_path.replace('_L', '_R')
+                new_var_target.bone_target = new_var_target.bone_target.replace('_L', '_R')
 
     new_fcurve.driver.type = fcurve.driver.type
     new_fcurve.driver.expression = fcurve.driver.expression
@@ -1070,14 +1320,20 @@ def register():
         bpy.utils.register_class(organize_bones)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
         bpy.utils.register_class(mirror_rig_drivers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_copy_bone_driver'):
+        bpy.utils.register_class(copy_bone_driver)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_copy_transforms_constraint'):
         bpy.utils.register_class(add_copy_transforms_constraint)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_add_child_of_constraint'):
         bpy.utils.register_class(add_child_of_constraint)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_reset_child_of_inverse'):
         bpy.utils.register_class(reset_child_of_inverse)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_retarget_shrinkwrap_constraints'):
+        bpy.utils.register_class(retarget_shrinkwrap_constraints)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_copy_bone_shape'):
         bpy.utils.register_class(copy_bone_shape)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_cleanup_duplicate_bone_shapes'):
+        bpy.utils.register_class(cleanup_duplicate_bone_shapes)
     if not hasattr(bpy.types, 'LEO_TOOLS_PG_constraint_toggle'):
         bpy.utils.register_class(LEO_TOOLS_PG_constraint_toggle)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_copy_specific_constraints'):
@@ -1103,16 +1359,22 @@ def unregister():
         bpy.utils.unregister_class(symmetrize_bone_constraints)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_copy_bone_shape'):
         bpy.utils.unregister_class(copy_bone_shape)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_cleanup_duplicate_bone_shapes'):
+        bpy.utils.unregister_class(cleanup_duplicate_bone_shapes)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_copy_specific_constraints'):
         bpy.utils.unregister_class(copy_specific_constraints)
     if hasattr(bpy.types, 'LEO_TOOLS_PG_constraint_toggle'):
         bpy.utils.unregister_class(LEO_TOOLS_PG_constraint_toggle)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_reset_child_of_inverse'):
         bpy.utils.unregister_class(reset_child_of_inverse)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_retarget_shrinkwrap_constraints'):
+        bpy.utils.unregister_class(retarget_shrinkwrap_constraints)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_add_child_of_constraint'):
         bpy.utils.unregister_class(add_child_of_constraint)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_add_copy_transforms_constraint'):
         bpy.utils.unregister_class(add_copy_transforms_constraint)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_copy_bone_driver'):
+        bpy.utils.unregister_class(copy_bone_driver)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_mirror_rig_drivers'):
         bpy.utils.unregister_class(mirror_rig_drivers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_create_cage_deform_joints'):

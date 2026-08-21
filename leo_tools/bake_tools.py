@@ -188,7 +188,11 @@ class smart_bake_textures(bpy.types.Operator):
         layout.prop(self, "map_types")
 
     def _selected_meshes(self, context):
-        return [obj for obj in context.selected_objects if obj.type == 'MESH']
+        # Only bake what is actually selected and visible in the current
+        # viewport/view layer, not objects merely flagged selected while
+        # hidden or excluded from the active view layer.
+        return [obj for obj in context.selected_objects
+                if obj.type == 'MESH' and obj.visible_get(view_layer=context.view_layer)]
 
     def _get_udims_from_meshes(self, mesh_objects):
         udim_tiles = set()
@@ -1193,26 +1197,24 @@ class smart_bake_textures(bpy.types.Operator):
                 context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_denoising') else None
             original_use_preview_denoising = context.scene.cycles.use_preview_denoising if hasattr(
                 context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_preview_denoising') else None
+            original_use_selected_to_active = context.scene.render.bake.use_selected_to_active
             original_active = context.view_layer.objects.active
             original_selected = list(context.selected_objects)
             temp_bake_object = None
             restricted_states = {}
 
             def _make_selectable(obj):
-                # obj.select_set() silently fails on hidden/unselectable
-                # objects, which then leads to "No valid selected objects".
-                state = {}
-                if obj.hide_get():
-                    state['hide'] = True
-                    obj.hide_set(False)
+                # obj is already viewport-visible (see _selected_meshes), but
+                # hide_select can still block select_set() below.
                 if obj.hide_select:
-                    state['hide_select'] = True
+                    restricted_states[obj.name] = {'hide_select': True}
                     obj.hide_select = False
-                if state:
-                    restricted_states[obj.name] = state
 
             try:
                 context.scene.render.engine = 'CYCLES'
+                # Left enabled from a previous manual bake, this makes Cycles
+                # reject a single selected object with "No valid selected objects".
+                context.scene.render.bake.use_selected_to_active = False
                 if hasattr(context.scene, 'cycles'):
                     context.scene.cycles.samples = 1
                     if hasattr(context.scene.cycles, 'use_denoising'):
@@ -1232,12 +1234,14 @@ class smart_bake_textures(bpy.types.Operator):
                     temp_bake_object] if temp_bake_object else selected_meshes
 
                 bpy.ops.object.select_all(action='DESELECT')
+                valid_bake_targets = []
                 for obj in bake_targets:
                     if obj and obj.name in bpy.data.objects:
                         _make_selectable(obj)
                         obj.select_set(True)
-                if bake_targets and bake_targets[0] and bake_targets[0].name in bpy.data.objects:
-                    context.view_layer.objects.active = bake_targets[0]
+                        valid_bake_targets.append(obj)
+                if valid_bake_targets:
+                    context.view_layer.objects.active = valid_bake_targets[0]
                 else:
                     self.report(
                         {'ERROR'}, "No valid object available for baking")
@@ -1248,16 +1252,27 @@ class smart_bake_textures(bpy.types.Operator):
                         {'ERROR'}, "Could not select the object(s) to bake (they may be hidden or excluded from the view layer)")
                     return {'CANCELLED'}
 
+                # bpy.ops.object.bake() reads its selection through
+                # CTX_data_selected_objects, which can miss the selection we
+                # just made when this operator runs from a props dialog
+                # context; force the right objects via an explicit override.
+                bake_override = dict(
+                    active_object=valid_bake_targets[0],
+                    selected_objects=valid_bake_targets,
+                    selected_editable_objects=valid_bake_targets,
+                )
+
                 for map_type in ordered_requested_map_types:
                     self._activate_map_nodes(materials, map_type)
 
                     if map_type == 'NORMAL':
-                        bpy.ops.object.bake(
-                            type='NORMAL',
-                            normal_space='TANGENT',
-                            use_clear=True,
-                            margin=2
-                        )
+                        with context.temp_override(**bake_override):
+                            bpy.ops.object.bake(
+                                type='NORMAL',
+                                normal_space='TANGENT',
+                                use_clear=True,
+                                margin=2
+                            )
                     else:
                         overrides = []
                         for material in materials:
@@ -1275,11 +1290,12 @@ class smart_bake_textures(bpy.types.Operator):
                             continue
 
                         try:
-                            bpy.ops.object.bake(
-                                type='EMIT',
-                                use_clear=True,
-                                margin=2
-                            )
+                            with context.temp_override(**bake_override):
+                                bpy.ops.object.bake(
+                                    type='EMIT',
+                                    use_clear=True,
+                                    margin=2
+                                )
                         finally:
                             for override_data in overrides:
                                 self._restore_emission_override(override_data)
@@ -1297,13 +1313,12 @@ class smart_bake_textures(bpy.types.Operator):
                     context.scene.cycles.use_denoising = original_use_denoising
                 if original_use_preview_denoising is not None and hasattr(context.scene, 'cycles') and hasattr(context.scene.cycles, 'use_preview_denoising'):
                     context.scene.cycles.use_preview_denoising = original_use_preview_denoising
+                context.scene.render.bake.use_selected_to_active = original_use_selected_to_active
 
                 for obj_name, state in restricted_states.items():
                     obj = bpy.data.objects.get(obj_name)
                     if not obj:
                         continue
-                    if state.get('hide'):
-                        obj.hide_set(True)
                     if state.get('hide_select'):
                         obj.hide_select = True
 
@@ -1449,6 +1464,12 @@ def _force_find_bake_node(material, map_type):
     return None
 
 
+def _force_link_is_from_bake(link):
+    # Bake nodes, and the normal-map/displacement helpers created by
+    # _force_connect_baked_inputs, are all named with a "BAKE_" prefix.
+    return link.from_node.name.startswith("BAKE_")
+
+
 def _force_connect_original_inputs(material):
     links = material.node_tree.links
     principled = _force_get_principled_node(material)
@@ -1466,46 +1487,63 @@ def _force_connect_original_inputs(material):
 
         reroute = material.node_tree.nodes.get(
             _force_source_reroute_name(map_type))
-        if not (reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links):
+        has_reroute = bool(
+            reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links)
+        has_baked_link = any(
+            _force_link_is_from_bake(link) for link in socket.links)
+        if not has_reroute and not has_baked_link:
             continue
 
         for link in socket.links[:]:
             links.remove(link)
 
-        try:
-            links.new(reroute.outputs[0], socket)
-            changed += 1
-        except RuntimeError:
-            pass
+        if has_reroute:
+            try:
+                links.new(reroute.outputs[0], socket)
+            except RuntimeError:
+                pass
+        changed += 1
 
     normal_input = principled.inputs.get('Normal')
     if normal_input:
         normal_reroute = material.node_tree.nodes.get(
             _force_source_reroute_name('NORMAL'))
-        if normal_reroute and normal_reroute.type == 'REROUTE' and normal_reroute.inputs[0].links:
+        has_reroute = bool(
+            normal_reroute and normal_reroute.type == 'REROUTE' and normal_reroute.inputs[0].links)
+        has_baked_link = any(
+            _force_link_is_from_bake(link) for link in normal_input.links)
+        if has_reroute or has_baked_link:
             for link in normal_input.links[:]:
                 links.remove(link)
-            try:
-                # Always connect to the reroute output
-                # The reroute has the normalize node feeding into it
-                links.new(normal_reroute.outputs[0], normal_input)
-                changed += 1
-            except RuntimeError:
-                pass
+            if has_reroute:
+                try:
+                    # Always connect to the reroute output
+                    # The reroute has the normalize node feeding into it
+                    links.new(normal_reroute.outputs[0], normal_input)
+                except RuntimeError:
+                    pass
+            changed += 1
 
     output = _force_get_output_node(material)
     if output and output.inputs.get('Displacement'):
+        displacement_input = output.inputs['Displacement']
         displacement_reroute = material.node_tree.nodes.get(
             _force_source_reroute_name('DISPLACEMENT'))
-        if displacement_reroute and displacement_reroute.type == 'REROUTE' and displacement_reroute.inputs[0].links:
-            for link in output.inputs['Displacement'].links[:]:
+        has_reroute = bool(
+            displacement_reroute and displacement_reroute.type == 'REROUTE'
+            and displacement_reroute.inputs[0].links)
+        has_baked_link = any(
+            _force_link_is_from_bake(link) for link in displacement_input.links)
+        if has_reroute or has_baked_link:
+            for link in displacement_input.links[:]:
                 links.remove(link)
-            try:
-                links.new(
-                    displacement_reroute.outputs[0], output.inputs['Displacement'])
-                changed += 1
-            except RuntimeError:
-                pass
+            if has_reroute:
+                try:
+                    links.new(
+                        displacement_reroute.outputs[0], displacement_input)
+                except RuntimeError:
+                    pass
+            changed += 1
 
     return changed
 

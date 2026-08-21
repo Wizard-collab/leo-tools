@@ -97,6 +97,8 @@ class ModelingPanel(bpy.types.Panel):
                         text="Remove collision modifiers")
         layout.operator("leo_tools.remove_all_modifiers",
                         text="Remove all modifiers")
+        layout.operator("leo_tools.copy_modifiers_with_drivers",
+                        text="Copy modifiers with drivers")
         layout.separator()
         layout.label(text="Mesh")
         layout.operator("leo_tools.remove_all_vertex_groups",
@@ -782,6 +784,84 @@ class remove_all_modifiers(bpy.types.Operator):
                 obj.modifiers.remove(mod)
                 removed_count += 1
         self.report({'INFO'}, f"Removed {removed_count} modifier(s)")
+        return {'FINISHED'}
+
+
+def _copy_modifier_properties(mod, new_mod):
+    for prop in mod.bl_rna.properties:
+        identifier = prop.identifier
+        if prop.is_readonly or identifier in ('rna_type', 'name', 'type'):
+            continue
+        try:
+            value = getattr(mod, identifier)
+        except AttributeError:
+            continue
+        try:
+            setattr(new_mod, identifier, value)
+        except (AttributeError, TypeError):
+            pass
+
+
+class copy_modifiers_with_drivers(bpy.types.Operator):
+    bl_idname = "leo_tools.copy_modifiers_with_drivers"
+    bl_label = "Copy Modifiers With Drivers"
+    bl_description = "Copy every modifier from the active object to the other selected objects, including any drivers on their properties"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and len(context.selected_objects) > 1
+
+    def execute(self, context):
+        source = context.active_object
+        targets = [obj for obj in context.selected_objects if obj != source]
+        if not targets:
+            self.report(
+                {'ERROR'}, "Select at least two objects (active object is the source)")
+            return {'CANCELLED'}
+
+        copied_modifiers = 0
+        copied_drivers = 0
+
+        for target in targets:
+            if not hasattr(target, 'modifiers'):
+                continue
+
+            for mod in source.modifiers:
+                existing = target.modifiers.get(mod.name)
+                if existing:
+                    target.modifiers.remove(existing)
+                new_mod = target.modifiers.new(name=mod.name, type=mod.type)
+                _copy_modifier_properties(mod, new_mod)
+                copied_modifiers += 1
+
+                if not (source.animation_data and source.animation_data.drivers):
+                    continue
+
+                prefix = f'modifiers["{mod.name}"]'
+                for fcurve in source.animation_data.drivers:
+                    if not fcurve.data_path.startswith(prefix):
+                        continue
+                    try:
+                        target.driver_remove(
+                            fcurve.data_path, fcurve.array_index)
+                    except (TypeError, ValueError):
+                        try:
+                            target.driver_remove(fcurve.data_path)
+                        except (TypeError, ValueError):
+                            pass
+                    try:
+                        new_fcurve = target.driver_add(
+                            fcurve.data_path, fcurve.array_index)
+                    except TypeError:
+                        new_fcurve = target.driver_add(fcurve.data_path)
+                    rigging_tools.copy_fcurve_properties(
+                        fcurve, new_fcurve, mirror_targets=False)
+                    copied_drivers += 1
+
+        self.report(
+            {'INFO'}, f"Copied {copied_modifiers} modifier(s) and {copied_drivers} driver(s) "
+            f"to {len(targets)} object(s)")
         return {'FINISHED'}
 
 
@@ -1928,6 +2008,8 @@ def register():
         bpy.utils.register_class(add_msh_suffix)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
         bpy.utils.register_class(remove_all_modifiers)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_copy_modifiers_with_drivers'):
+        bpy.utils.register_class(copy_modifiers_with_drivers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_collision_modifiers'):
         bpy.utils.register_class(remove_collision_modifiers)
     if not hasattr(bpy.types, 'LEO_TOOLS_OT_remove_subdivision_modifiers'):
@@ -2011,6 +2093,8 @@ def unregister():
         bpy.utils.unregister_class(add_msh_suffix)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_all_modifiers'):
         bpy.utils.unregister_class(remove_all_modifiers)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_copy_modifiers_with_drivers'):
+        bpy.utils.unregister_class(copy_modifiers_with_drivers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_collision_modifiers'):
         bpy.utils.unregister_class(remove_collision_modifiers)
     if hasattr(bpy.types, 'LEO_TOOLS_OT_remove_subdivision_modifiers'):
