@@ -529,6 +529,8 @@ class smart_bake_textures(bpy.types.Operator):
             return True
         if node_name.startswith("__LEOTOOLS_BAKE_FALLBACK_"):
             return True
+        if node_name == "__LEOTOOLS_BAKE_NORMALIZE_NORMAL":
+            return True
         return False
 
     def _ensure_fallback_source_node(self, material, map_type, source_input):
@@ -640,6 +642,10 @@ class smart_bake_textures(bpy.types.Operator):
                     # Position it between the source and the reroute
                     normalize_node.location = (
                         reroute.location.x - 200, reroute.location.y)
+
+                # Never feed the normalize node's own output back into itself.
+                if getattr(source_socket, 'node', None) == normalize_node:
+                    return
 
                 # Connect: source -> normalize -> reroute
                 node_tree.links.new(source_socket, normalize_node.inputs[0])
