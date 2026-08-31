@@ -18,7 +18,11 @@ _BAKE_MAP_SUFFIXES = (
     'subsurface_scale',
     'sheen',
     'sheen_roughness',
-    'sheen_tint'
+    'sheen_tint',
+    'specular',
+    'specular_tint',
+    'anisotropic',
+    'anisotropic_rotation'
 )
 
 
@@ -77,7 +81,8 @@ class smart_bake_textures(bpy.types.Operator):
             ('EMISSION', "Emission", "Bake emission color and emission strength"),
             ('ALPHA', "Alpha", "Bake alpha"),
             ('TRANSMISSION', "Transmission", "Bake transmission"),
-            ('SHEEN', "Sheen", "Bake sheen and related parameters")
+            ('SHEEN', "Sheen", "Bake sheen and related parameters"),
+            ('SPECULAR', "Specular", "Bake specular, anisotropic and specular tint parameters")
         ],
         options={'ENUM_FLAG'},
         default={'BASECOLOR', 'ROUGHNESS', 'METALLIC', 'NORMAL'}
@@ -334,7 +339,11 @@ class smart_bake_textures(bpy.types.Operator):
             'SUBSURFACE_SCALE': 'subsurface_scale',
             'SHEEN': 'sheen',
             'SHEEN_ROUGHNESS': 'sheen_roughness',
-            'SHEEN_TINT': 'sheen_tint'
+            'SHEEN_TINT': 'sheen_tint',
+            'SPECULAR': 'specular',
+            'SPECULAR_TINT': 'specular_tint',
+            'ANISOTROPIC': 'anisotropic',
+            'ANISOTROPIC_ROTATION': 'anisotropic_rotation'
         }
         return mapping[map_type]
 
@@ -348,6 +357,11 @@ class smart_bake_textures(bpy.types.Operator):
         if 'SHEEN' in expanded:
             expanded.add('SHEEN_ROUGHNESS')
             expanded.add('SHEEN_TINT')
+
+        if 'SPECULAR' in expanded:
+            expanded.add('SPECULAR_TINT')
+            expanded.add('ANISOTROPIC')
+            expanded.add('ANISOTROPIC_ROTATION')
 
         if 'EMISSION' in expanded:
             expanded.add('EMISSION_STRENGTH')
@@ -370,7 +384,11 @@ class smart_bake_textures(bpy.types.Operator):
             'EMISSION_STRENGTH',
             'SHEEN',
             'SHEEN_ROUGHNESS',
-            'SHEEN_TINT'
+            'SHEEN_TINT',
+            'SPECULAR',
+            'SPECULAR_TINT',
+            'ANISOTROPIC',
+            'ANISOTROPIC_ROTATION'
         ]
 
     def _principled_input_candidates(self, map_type):
@@ -389,7 +407,11 @@ class smart_bake_textures(bpy.types.Operator):
             'SHEEN': ['Sheen Weight', 'Sheen'],
             'SHEEN_WEIGHT': ['Sheen Weight', 'Sheen'],
             'SHEEN_ROUGHNESS': ['Sheen Roughness'],
-            'SHEEN_TINT': ['Sheen Tint']
+            'SHEEN_TINT': ['Sheen Tint'],
+            'SPECULAR': ['Specular IOR Level', 'Specular'],
+            'SPECULAR_TINT': ['Specular Tint'],
+            'ANISOTROPIC': ['Anisotropic'],
+            'ANISOTROPIC_ROTATION': ['Anisotropic Rotation']
         }
         return mapping.get(map_type, [])
 
@@ -682,7 +704,11 @@ class smart_bake_textures(bpy.types.Operator):
             'EMISSION_STRENGTH',
             'SHEEN',
             'SHEEN_ROUGHNESS',
-            'SHEEN_TINT'
+            'SHEEN_TINT',
+            'SPECULAR',
+            'SPECULAR_TINT',
+            'ANISOTROPIC',
+            'ANISOTROPIC_ROTATION'
         }:
             try:
                 return float(stored_value)
@@ -1370,7 +1396,11 @@ def _force_map_suffix(map_type):
         'SUBSURFACE_SCALE': 'subsurface_scale',
         'SHEEN': 'sheen',
         'SHEEN_ROUGHNESS': 'sheen_roughness',
-        'SHEEN_TINT': 'sheen_tint'
+        'SHEEN_TINT': 'sheen_tint',
+        'SPECULAR': 'specular',
+        'SPECULAR_TINT': 'specular_tint',
+        'ANISOTROPIC': 'anisotropic',
+        'ANISOTROPIC_ROTATION': 'anisotropic_rotation'
     }
     return mapping[map_type]
 
@@ -1391,7 +1421,11 @@ def _force_map_order():
         'EMISSION_STRENGTH',
         'SHEEN',
         'SHEEN_ROUGHNESS',
-        'SHEEN_TINT'
+        'SHEEN_TINT',
+        'SPECULAR',
+        'SPECULAR_TINT',
+        'ANISOTROPIC',
+        'ANISOTROPIC_ROTATION'
     ]
 
 
@@ -1410,7 +1444,11 @@ def _force_principled_input_candidates(map_type):
         'SUBSURFACE_SCALE': ['Subsurface Scale'],
         'SHEEN': ['Sheen Weight', 'Sheen'],
         'SHEEN_ROUGHNESS': ['Sheen Roughness'],
-        'SHEEN_TINT': ['Sheen Tint']
+        'SHEEN_TINT': ['Sheen Tint'],
+        'SPECULAR': ['Specular IOR Level', 'Specular'],
+        'SPECULAR_TINT': ['Specular Tint'],
+        'ANISOTROPIC': ['Anisotropic'],
+        'ANISOTROPIC_ROTATION': ['Anisotropic Rotation']
     }
     return mapping.get(map_type, [])
 
