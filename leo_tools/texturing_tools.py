@@ -1,5 +1,7 @@
 
 
+import re
+
 import bpy
 
 
@@ -119,6 +121,69 @@ def create_map_with_udims(name, width):
     return new_image
 
 
+class LEO_TOOLS_OT_apply_collection_shaders(bpy.types.Operator):
+    """Copy materials from *_LOCAL source objects to matching target objects"""
+    bl_idname = "leo_tools.apply_collection_shaders"
+    bl_label = "Apply Collection Shaders"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        source_collection = context.scene.leo_shader_source_collection
+        target_collection = context.scene.leo_shader_target_collection
+        if not source_collection or not target_collection:
+            self.report({'ERROR'}, "Select both a shader and target collection")
+            return {'CANCELLED'}
+
+        target_objects = {
+            obj.name: obj for obj in target_collection.all_objects
+            if obj.type == 'MESH'
+        }
+        copied_count = 0
+        missing_count = 0
+        empty_source_count = 0
+
+        for source_obj in source_collection.all_objects:
+            if source_obj.type != 'MESH':
+                continue
+
+            name_match = re.fullmatch(r"(.+)_LOCAL(?:_\d+)?", source_obj.name)
+            if name_match is None:
+                continue
+
+            target_name = name_match.group(1)
+            target_obj = target_objects.get(target_name)
+            if target_obj is None:
+                missing_count += 1
+                continue
+            source_materials = [
+                slot.material for slot in source_obj.material_slots
+            ]
+            if not any(source_materials):
+                empty_source_count += 1
+                continue
+
+            if target_obj.data.library and target_obj.data.override_library is None:
+                target_obj.data = target_obj.data.copy()
+            target_obj.data.materials.clear()
+            for material in source_materials:
+                target_obj.data.materials.append(material)
+            for slot in target_obj.material_slots:
+                slot.link = 'DATA'
+            copied_count += 1
+
+        if not copied_count:
+            self.report({'WARNING'}, "No matched source objects with materials found")
+            return {'CANCELLED'}
+
+        message = f"Applied shaders to {copied_count} object(s)"
+        if missing_count:
+            message += f"; {missing_count} target(s) missing"
+        if empty_source_count:
+            message += f"; {empty_source_count} source(s) have no materials"
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
+
+
 # Operator to create UDIM map with dialog
 class OBJECT_OT_create_udim_map(bpy.types.Operator):
     """Create a UDIM map for selected objects"""
@@ -152,16 +217,36 @@ class OBJECT_OT_create_udim_map(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self)
 
 
-# Register the operator
 def register():
-    try:
-        bpy.utils.register_class(OBJECT_OT_create_udim_map)
-    except ValueError:
-        pass
+    for property_name in (
+            "leo_shader_source_collection",
+            "leo_shader_target_collection"):
+        if hasattr(bpy.types.Scene, property_name):
+            delattr(bpy.types.Scene, property_name)
+    bpy.types.Scene.leo_shader_source_collection = bpy.props.PointerProperty(
+        name="Shader Collection",
+        description="Collection containing objects named *_LOCAL",
+        type=bpy.types.Collection
+    )
+    bpy.types.Scene.leo_shader_target_collection = bpy.props.PointerProperty(
+        name="Target Collection",
+        description="Collection containing matching object names",
+        type=bpy.types.Collection
+    )
+    for operator_class in (
+            LEO_TOOLS_OT_apply_collection_shaders,
+            OBJECT_OT_create_udim_map):
+        registered_class = getattr(bpy.types, operator_class.__name__, None)
+        if registered_class is not None:
+            bpy.utils.unregister_class(registered_class)
+        bpy.utils.register_class(operator_class)
 
 
 def unregister():
     bpy.utils.unregister_class(OBJECT_OT_create_udim_map)
+    bpy.utils.unregister_class(LEO_TOOLS_OT_apply_collection_shaders)
+    del bpy.types.Scene.leo_shader_source_collection
+    del bpy.types.Scene.leo_shader_target_collection
 
 
 if __name__ == "__main__":

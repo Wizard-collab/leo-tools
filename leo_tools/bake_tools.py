@@ -537,6 +537,18 @@ class smart_bake_textures(bpy.types.Operator):
         else:
             material[default_prop] = list(value)
 
+    def _resolve_through_reroutes(self, socket):
+        seen = set()
+        while socket is not None:
+            node = getattr(socket, 'node', None)
+            if node is None or node.type != 'REROUTE' or node.name in seen:
+                return socket
+            seen.add(node.name)
+            if not node.inputs[0].links:
+                return None
+            socket = node.inputs[0].links[0].from_socket
+        return socket
+
     def _is_baked_source_socket(self, source_socket):
         node = getattr(source_socket, 'node', None)
         if node is None:
@@ -775,8 +787,17 @@ class smart_bake_textures(bpy.types.Operator):
             source_socket = None
             default_value = None
 
-            if source_input.links:
-                disp_from_socket = source_input.links[0].from_socket
+            # Prefer the marked original source: on a re-bake, the live link
+            # points at our own previous bake's Displacement node, and baking
+            # from it would read the image while it is being cleared/written,
+            # producing an all-black result.
+            disp_from_socket = self._get_marked_source(
+                material, 'DISPLACEMENT')
+            if disp_from_socket is None and source_input.links:
+                disp_from_socket = self._resolve_through_reroutes(
+                    source_input.links[0].from_socket)
+
+            if disp_from_socket is not None:
                 disp_from_node = getattr(disp_from_socket, 'node', None)
 
                 # If material output is driven by a Displacement node, bake its Height input source.
@@ -784,7 +805,8 @@ class smart_bake_textures(bpy.types.Operator):
                     height_input = disp_from_node.inputs.get('Height')
                     if height_input is not None:
                         if height_input.links:
-                            source_socket = height_input.links[0].from_socket
+                            source_socket = self._resolve_through_reroutes(
+                                height_input.links[0].from_socket)
                         else:
                             try:
                                 default_value = float(
@@ -990,6 +1012,11 @@ class smart_bake_textures(bpy.types.Operator):
                     output = self._get_output_node(material)
                     if output is None:
                         continue
+                    marked_source = self._get_marked_source(
+                        material, 'DISPLACEMENT')
+                    if marked_source is None:
+                        # No displacement in the original shader, don't plug the bake in.
+                        continue
 
                     displacement_node_name = f"{bake_node_name}_displacement"
                     displacement_node = node_tree.nodes.get(
@@ -1001,6 +1028,15 @@ class smart_bake_textures(bpy.types.Operator):
                         displacement_node.label = displacement_node_name
                         displacement_node.location = (
                             bake_node.location.x + 220, bake_node.location.y)
+
+                        # Match the original Displacement node's settings so the
+                        # baked height is reinterpreted the same way as the source.
+                        original_disp_node = getattr(
+                            marked_source, 'node', None)
+                        if original_disp_node and original_disp_node.type == 'DISPLACEMENT':
+                            displacement_node.space = original_disp_node.space
+                            displacement_node.inputs['Midlevel'].default_value = original_disp_node.inputs['Midlevel'].default_value
+                            displacement_node.inputs['Scale'].default_value = original_disp_node.inputs['Scale'].default_value
 
                     for link in displacement_node.inputs['Height'].links[:]:
                         links.remove(link)
@@ -1465,6 +1501,13 @@ def _force_source_reroute_name(map_type):
     return f"__LEOTOOLS_BAKE_SOURCE_{_force_map_suffix(map_type)}"
 
 
+def _force_get_marked_source(material, map_type):
+    reroute = material.node_tree.nodes.get(_force_source_reroute_name(map_type))
+    if reroute and reroute.type == 'REROUTE' and reroute.inputs[0].links:
+        return reroute.inputs[0].links[0].from_socket
+    return None
+
+
 def _force_get_principled_node(material):
     if not material.use_nodes or not material.node_tree:
         return None
@@ -1638,6 +1681,10 @@ def _force_connect_baked_inputs(material):
             output = _force_get_output_node(material)
             if output is None:
                 continue
+            marked_source = _force_get_marked_source(material, 'DISPLACEMENT')
+            if marked_source is None:
+                # No displacement in the original shader, don't plug the bake in.
+                continue
 
             displacement_node_name = f"{bake_node_name}_displacement"
             displacement_node = material.node_tree.nodes.get(
@@ -1649,6 +1696,14 @@ def _force_connect_baked_inputs(material):
                 displacement_node.label = displacement_node_name
                 displacement_node.location = (
                     bake_node.location.x + 220, bake_node.location.y)
+
+                # Match the original Displacement node's settings so the
+                # baked height is reinterpreted the same way as the source.
+                original_disp_node = getattr(marked_source, 'node', None)
+                if original_disp_node and original_disp_node.type == 'DISPLACEMENT':
+                    displacement_node.space = original_disp_node.space
+                    displacement_node.inputs['Midlevel'].default_value = original_disp_node.inputs['Midlevel'].default_value
+                    displacement_node.inputs['Scale'].default_value = original_disp_node.inputs['Scale'].default_value
 
             for link in displacement_node.inputs['Height'].links[:]:
                 links.remove(link)

@@ -5,6 +5,7 @@ from leo_tools import texturing_tools
 from leo_tools import animation_transfer
 from leo_tools import empty_from_vertices
 from leo_tools import collection_display
+from leo_tools import instancing_tools
 from leo_tools import bake_tools
 from leo_tools import render_tools
 from leo_tools import rigging_tools
@@ -68,6 +69,10 @@ class TexturingPanel(bpy.types.Panel):
                         text="Force original inputs")
         layout.separator()
         layout.label(text="Shading")
+        layout.prop(context.scene, "leo_shader_source_collection")
+        layout.prop(context.scene, "leo_shader_target_collection")
+        layout.operator("leo_tools.apply_collection_shaders",
+                text="Apply collection shaders")
         layout.operator("leo_tools.remove_materials", text="Remove materials")
         layout.operator("leo_tools.create_checker",
                         text="Create new checker material")
@@ -129,6 +134,8 @@ class DisplayPanel(bpy.types.Panel):
                         text="Collection to Textured")
         layout.operator("leo_tools.local_copy_linked_collection",
                         text="Local copy linked collection")
+        layout.operator("leo_tools.instance_on_collection",
+                text="Instance Final on Collection")
         layout.separator()
         layout.label(text="Grease Pencil")
         layout.operator("leo_tools.merge_gp_objects",
@@ -1965,6 +1972,9 @@ def register():
     # Register collection display tools
     collection_display.register()
 
+    # Register collection instancing tools
+    instancing_tools.register()
+
     # Register bake tools
     bake_tools.register()
 
@@ -2130,6 +2140,9 @@ def unregister():
 
     # Unregister collection display tools
     collection_display.unregister()
+
+    # Unregister collection instancing tools
+    instancing_tools.unregister()
 
     # Unregister bake tools
     bake_tools.unregister()
