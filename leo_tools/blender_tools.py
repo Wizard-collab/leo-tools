@@ -132,6 +132,8 @@ class DisplayPanel(bpy.types.Panel):
                         text="Collection to Bounding Box")
         layout.operator("object.collection_textured",
                         text="Collection to Textured")
+        layout.operator("object.collection_parent_to_empty",
+                        text="Parent Collection to Empty")
         layout.operator("leo_tools.local_copy_linked_collection",
                         text="Local copy linked collection")
         layout.operator("leo_tools.instance_on_collection",
