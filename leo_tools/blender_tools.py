@@ -9,6 +9,7 @@ from leo_tools import instancing_tools
 from leo_tools import bake_tools
 from leo_tools import render_tools
 from leo_tools import rigging_tools
+from leo_tools import deadline_blender_submitter
 
 
 def get_action_fcurves(action, id_data=None):
@@ -2048,6 +2049,18 @@ def register():
         bpy.utils.register_class(RenderSettingsPanel)
     if not hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
         bpy.utils.register_class(AnimToolsPanel)
+    if not hasattr(bpy.types, 'VIEW3D_PT_leo_deadline_submitter'):
+        bpy.utils.register_class(deadline_blender_submitter.LEODeadlinePanel)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_submit_blender_to_deadline'):
+        bpy.utils.register_class(deadline_blender_submitter.LEODeadlineSubmitOperator)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_deadline_autofill_from_scene'):
+        bpy.utils.register_class(deadline_blender_submitter.LEODeadlineAutofillOperator)
+    if not hasattr(bpy.types, 'LEO_TOOLS_OT_deadline_refresh_lists'):
+        bpy.utils.register_class(deadline_blender_submitter.LEODeadlineRefreshListsOperator)
+
+    # Register the local Deadline submitter properties
+    if not hasattr(bpy.types.Scene, 'leo_deadline_output'):
+        deadline_blender_submitter.register_properties()
 
     # Register rigging tools (panel, operators, shape key modules)
     rigging_tools.register()
@@ -2133,6 +2146,16 @@ def unregister():
         bpy.utils.unregister_class(RenderSettingsPanel)
     if hasattr(bpy.types, 'VIEW3D_PT_anim_tools'):
         bpy.utils.unregister_class(AnimToolsPanel)
+    if hasattr(bpy.types, 'VIEW3D_PT_leo_deadline_submitter'):
+        bpy.utils.unregister_class(deadline_blender_submitter.LEODeadlinePanel)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_submit_blender_to_deadline'):
+        bpy.utils.unregister_class(deadline_blender_submitter.LEODeadlineSubmitOperator)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_deadline_autofill_from_scene'):
+        bpy.utils.unregister_class(deadline_blender_submitter.LEODeadlineAutofillOperator)
+    if hasattr(bpy.types, 'LEO_TOOLS_OT_deadline_refresh_lists'):
+        bpy.utils.unregister_class(deadline_blender_submitter.LEODeadlineRefreshListsOperator)
+    if hasattr(bpy.types.Scene, 'leo_deadline_output'):
+        deadline_blender_submitter.unregister_properties()
 
     # Unregister animation transfer
     animation_transfer.unregister()

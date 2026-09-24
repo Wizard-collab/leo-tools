@@ -1,8 +1,8 @@
 """
 Render Tools
-Export/import view layers (name, render passes, and per-collection
-holdout/indirect/visibility settings) to/from JSON, so they can be
-transferred between scenes. Missing view layers are created on import.
+Export/import render settings and view layers (name, render passes, and
+per-collection holdout/indirect/visibility settings) to/from JSON, so they
+can be transferred between scenes. Missing view layers are created on import.
 """
 
 import json
@@ -10,6 +10,72 @@ import bpy
 from bpy.types import Operator, Panel
 from bpy.props import StringProperty
 from bpy_extras.io_utils import ExportHelper, ImportHelper
+
+
+OUTPUT_SETTINGS = {
+    "resolution_x", "resolution_y", "resolution_percentage",
+    "pixel_aspect_x", "pixel_aspect_y", "filepath", "image_settings",
+    "ffmpeg", "frame_map_old", "frame_map_new", "use_file_extension",
+    "use_overwrite", "use_placeholder",
+}
+
+
+def get_rna_settings(owner, excluded=None):
+    """Collect JSON-compatible writable scalar properties from an RNA owner."""
+    settings = {}
+    excluded = excluded or set()
+    for prop in owner.bl_rna.properties:
+        if (prop.identifier == "rna_type" or prop.identifier in excluded
+                or prop.is_readonly):
+            continue
+        if prop.type not in {'BOOLEAN', 'INT', 'FLOAT', 'STRING', 'ENUM'}:
+            continue
+
+        value = getattr(owner, prop.identifier)
+        if getattr(prop, "array_length", 0) > 0:
+            value = list(value)
+        settings[prop.identifier] = value
+    return settings
+
+
+def get_render_settings(scene):
+    """Collect settings shown in Render Properties, excluding Output Properties."""
+    settings = {
+        "render": get_rna_settings(scene.render, OUTPUT_SETTINGS),
+    }
+    for owner_name in ("cycles", "eevee"):
+        owner = getattr(scene, owner_name, None)
+        if owner is not None:
+            settings[owner_name] = get_rna_settings(owner)
+    return settings
+
+
+def apply_render_settings(scene, settings):
+    """Apply exported Render Properties supported by the current Blender version."""
+    owners = {"render": scene.render}
+    for owner_name in ("cycles", "eevee"):
+        owner = getattr(scene, owner_name, None)
+        if owner is not None:
+            owners[owner_name] = owner
+
+    if "render" not in settings and "cycles" not in settings and "eevee" not in settings:
+        settings = {"render": settings}
+
+    for owner_name, owner_settings in settings.items():
+        owner = owners.get(owner_name)
+        if owner is None:
+            continue
+        excluded = OUTPUT_SETTINGS if owner_name == "render" else set()
+        for key, value in owner_settings.items():
+            prop = owner.bl_rna.properties.get(key)
+            if (prop is None or prop.identifier in excluded
+                    or prop.is_readonly):
+                continue
+            try:
+                setattr(owner, key, value)
+            except (AttributeError, TypeError, ValueError):
+                # Render properties vary by Blender version and render engine.
+                continue
 
 
 def get_pass_settings(view_layer):
@@ -51,18 +117,33 @@ def apply_pass_settings(view_layer, passes):
                 setattr(cycles_settings, key, value)
 
 
-def flatten_layer_collections(layer_collection, result, is_root=True):
-    """Flatten a view layer's collection tree to {collection_name: settings},
-    skipping the root master collection which has no meaningful toggles."""
+def flatten_layer_collections(layer_collection, result, is_root=True,
+                              inherited_settings=None):
+    """Store hierarchical render flags at their highest enabled collection."""
+    inherited_settings = inherited_settings or {
+        "exclude": False,
+        "holdout": False,
+        "indirect_only": False,
+    }
+
     if not is_root:
-        result[layer_collection.collection.name] = {
+        current_settings = {
             "exclude": layer_collection.exclude,
             "holdout": layer_collection.holdout,
             "indirect_only": layer_collection.indirect_only,
-            "hide_viewport": layer_collection.hide_viewport,
         }
+        result[layer_collection.collection.name] = {
+            setting: True
+            for setting, enabled in current_settings.items()
+            if enabled and not inherited_settings[setting]
+        }
+        inherited_settings = {
+            setting: inherited_settings[setting] or current_settings[setting]
+            for setting in inherited_settings
+        }
+
     for child in layer_collection.children:
-        flatten_layer_collections(child, result, False)
+        flatten_layer_collections(child, result, False, inherited_settings)
 
 
 def find_layer_collection(layer_collection, name):
@@ -76,24 +157,38 @@ def find_layer_collection(layer_collection, name):
     return None
 
 
+def set_collection_setting_recursive(layer_collection, setting, value):
+    """Set a collection render flag on a collection and its descendants."""
+    setattr(layer_collection, setting, value)
+    for child in layer_collection.children:
+        set_collection_setting_recursive(child, setting, value)
+
+
+def clear_hierarchical_settings(layer_collection):
+    """Clear hierarchical render flags before applying the exported hierarchy."""
+    for child in layer_collection.children:
+        for setting in ("exclude", "holdout", "indirect_only"):
+            set_collection_setting_recursive(child, setting, False)
+
+
 def apply_collection_settings(view_layer, collections_data, stats):
-    """Apply saved holdout/indirect/visibility settings to collections that
-    exist in the target view layer, skipping (and counting) the rest."""
+    """Apply exported exclude, holdout, and indirect-only hierarchy settings."""
+    clear_hierarchical_settings(view_layer.layer_collection)
+
     for name, settings in collections_data.items():
         layer_collection = find_layer_collection(view_layer.layer_collection, name)
         if layer_collection is None:
             stats["skipped"] += 1
             continue
-        layer_collection.exclude = settings.get("exclude", layer_collection.exclude)
-        layer_collection.holdout = settings.get("holdout", layer_collection.holdout)
-        layer_collection.indirect_only = settings.get("indirect_only", layer_collection.indirect_only)
-        layer_collection.hide_viewport = settings.get("hide_viewport", layer_collection.hide_viewport)
+        for setting in ("exclude", "holdout", "indirect_only"):
+            if settings.get(setting, False):
+                set_collection_setting_recursive(layer_collection, setting, True)
         stats["applied"] += 1
 
 
 # EXPORT OPERATOR
 class LEO_TOOLS_OT_export_view_layers(Operator, ExportHelper):
-    """Export view layers (names, render passes, per-collection holdout/indirect/visibility) to a JSON file"""
+    """Export render settings and view layers to a JSON file."""
     bl_idname = "leo_tools.export_view_layers"
     bl_label = "Export View Layers"
     bl_options = {'REGISTER'}
@@ -119,6 +214,7 @@ class LEO_TOOLS_OT_export_view_layers(Operator, ExportHelper):
 
         data = {
             "scene": scene.name,
+            "render_settings": get_render_settings(scene),
             "view_layers": view_layers_data,
         }
 
@@ -131,7 +227,7 @@ class LEO_TOOLS_OT_export_view_layers(Operator, ExportHelper):
 
 # IMPORT OPERATOR
 class LEO_TOOLS_OT_import_view_layers(Operator, ImportHelper):
-    """Import view layers from a JSON file, creating any that don't already exist"""
+    """Import render settings and view layers from a JSON file."""
     bl_idname = "leo_tools.import_view_layers"
     bl_label = "Import View Layers"
     bl_options = {'REGISTER', 'UNDO'}
@@ -149,21 +245,44 @@ class LEO_TOOLS_OT_import_view_layers(Operator, ImportHelper):
             self.report({'ERROR'}, f"Failed to read file: {str(e)}")
             return {'CANCELLED'}
 
+        view_layers_data = data.get("view_layers", {})
+        if not view_layers_data:
+            self.report({'ERROR'}, "JSON contains no view layers; Blender requires at least one")
+            return {'CANCELLED'}
+
         stats = {"applied": 0, "skipped": 0}
         created = 0
+        removed = 0
 
-        for view_layer_name, view_layer_data in data.get("view_layers", {}).items():
+        apply_render_settings(scene, data.get("render_settings", {}))
+
+        imported_names = set(view_layers_data)
+        imported_layers = {}
+        for view_layer_name, view_layer_data in view_layers_data.items():
             view_layer = scene.view_layers.get(view_layer_name)
             if view_layer is None:
                 view_layer = scene.view_layers.new(name=view_layer_name)
                 created += 1
+            imported_layers[view_layer_name] = view_layer
 
+        active_view_layer = next(iter(imported_layers.values()))
+        for window in bpy.context.window_manager.windows:
+            if window.scene == scene:
+                window.view_layer = active_view_layer
+
+        for view_layer in list(scene.view_layers):
+            if view_layer.name not in imported_names:
+                scene.view_layers.remove(view_layer)
+                removed += 1
+
+        for view_layer_name, view_layer_data in view_layers_data.items():
+            view_layer = imported_layers[view_layer_name]
             apply_pass_settings(view_layer, view_layer_data.get("passes", {}))
             apply_collection_settings(view_layer, view_layer_data.get("collections", {}), stats)
 
         self.report(
             {'INFO'},
-            f"Imported {len(data.get('view_layers', {}))} view layer(s) ({created} created): "
+            f"Imported {len(view_layers_data)} view layer(s) ({created} created, {removed} removed): "
             f"{stats['applied']} collections applied, {stats['skipped']} skipped (not found)"
         )
         return {'FINISHED'}
