@@ -19,6 +19,11 @@ _BAKE_MAP_SUFFIXES = (
     'sheen',
     'sheen_roughness',
     'sheen_tint',
+    'coat',
+    'coat_roughness',
+    'coat_ior',
+    'coat_tint',
+    'coat_normal',
     'specular',
     'specular_tint',
     'anisotropic',
@@ -82,6 +87,7 @@ class smart_bake_textures(bpy.types.Operator):
             ('ALPHA', "Alpha", "Bake alpha"),
             ('TRANSMISSION', "Transmission", "Bake transmission"),
             ('SHEEN', "Sheen", "Bake sheen and related parameters"),
+            ('COAT', "Coat", "Bake coat and related parameters"),
             ('SPECULAR', "Specular", "Bake specular, anisotropic and specular tint parameters")
         ],
         options={'ENUM_FLAG'},
@@ -340,6 +346,11 @@ class smart_bake_textures(bpy.types.Operator):
             'SHEEN': 'sheen',
             'SHEEN_ROUGHNESS': 'sheen_roughness',
             'SHEEN_TINT': 'sheen_tint',
+            'COAT': 'coat',
+            'COAT_ROUGHNESS': 'coat_roughness',
+            'COAT_IOR': 'coat_ior',
+            'COAT_TINT': 'coat_tint',
+            'COAT_NORMAL': 'coat_normal',
             'SPECULAR': 'specular',
             'SPECULAR_TINT': 'specular_tint',
             'ANISOTROPIC': 'anisotropic',
@@ -357,6 +368,12 @@ class smart_bake_textures(bpy.types.Operator):
         if 'SHEEN' in expanded:
             expanded.add('SHEEN_ROUGHNESS')
             expanded.add('SHEEN_TINT')
+
+        if 'COAT' in expanded:
+            expanded.add('COAT_ROUGHNESS')
+            expanded.add('COAT_IOR')
+            expanded.add('COAT_TINT')
+            expanded.add('COAT_NORMAL')
 
         if 'SPECULAR' in expanded:
             expanded.add('SPECULAR_TINT')
@@ -385,6 +402,9 @@ class smart_bake_textures(bpy.types.Operator):
             'SHEEN',
             'SHEEN_ROUGHNESS',
             'SHEEN_TINT',
+            'COAT',
+            'COAT_ROUGHNESS',
+            'COAT_IOR',
             'SPECULAR',
             'SPECULAR_TINT',
             'ANISOTROPIC',
@@ -408,6 +428,11 @@ class smart_bake_textures(bpy.types.Operator):
             'SHEEN_WEIGHT': ['Sheen Weight', 'Sheen'],
             'SHEEN_ROUGHNESS': ['Sheen Roughness'],
             'SHEEN_TINT': ['Sheen Tint'],
+            'COAT': ['Coat Weight', 'Coat'],
+            'COAT_ROUGHNESS': ['Coat Roughness'],
+            'COAT_IOR': ['Coat IOR'],
+            'COAT_TINT': ['Coat Tint'],
+            'COAT_NORMAL': ['Coat Normal'],
             'SPECULAR': ['Specular IOR Level', 'Specular'],
             'SPECULAR_TINT': ['Specular Tint'],
             'ANISOTROPIC': ['Anisotropic'],
@@ -717,6 +742,11 @@ class smart_bake_textures(bpy.types.Operator):
             'SHEEN',
             'SHEEN_ROUGHNESS',
             'SHEEN_TINT',
+            'COAT',
+            'COAT_ROUGHNESS',
+            'COAT_IOR',
+            'COAT_TINT',
+            'COAT_NORMAL',
             'SPECULAR',
             'SPECULAR_TINT',
             'ANISOTROPIC',
@@ -981,8 +1011,9 @@ class smart_bake_textures(bpy.types.Operator):
                 if bake_node is None or bake_node.type != 'TEX_IMAGE':
                     continue
 
-                if map_type == 'NORMAL':
-                    normal_input = principled.inputs.get('Normal')
+                if map_type in {'NORMAL', 'COAT_NORMAL'}:
+                    normal_input = self._get_principled_input_socket(
+                        principled, map_type)
                     if normal_input is None:
                         continue
 
@@ -1433,6 +1464,11 @@ def _force_map_suffix(map_type):
         'SHEEN': 'sheen',
         'SHEEN_ROUGHNESS': 'sheen_roughness',
         'SHEEN_TINT': 'sheen_tint',
+        'COAT': 'coat',
+        'COAT_ROUGHNESS': 'coat_roughness',
+        'COAT_IOR': 'coat_ior',
+        'COAT_TINT': 'coat_tint',
+        'COAT_NORMAL': 'coat_normal',
         'SPECULAR': 'specular',
         'SPECULAR_TINT': 'specular_tint',
         'ANISOTROPIC': 'anisotropic',
@@ -1458,6 +1494,11 @@ def _force_map_order():
         'SHEEN',
         'SHEEN_ROUGHNESS',
         'SHEEN_TINT',
+        'COAT',
+        'COAT_ROUGHNESS',
+        'COAT_IOR',
+        'COAT_TINT',
+        'COAT_NORMAL',
         'SPECULAR',
         'SPECULAR_TINT',
         'ANISOTROPIC',
@@ -1481,6 +1522,11 @@ def _force_principled_input_candidates(map_type):
         'SHEEN': ['Sheen Weight', 'Sheen'],
         'SHEEN_ROUGHNESS': ['Sheen Roughness'],
         'SHEEN_TINT': ['Sheen Tint'],
+        'COAT': ['Coat Weight', 'Coat'],
+        'COAT_ROUGHNESS': ['Coat Roughness'],
+        'COAT_IOR': ['Coat IOR'],
+        'COAT_TINT': ['Coat Tint'],
+        'COAT_NORMAL': ['Coat Normal'],
         'SPECULAR': ['Specular IOR Level', 'Specular'],
         'SPECULAR_TINT': ['Specular Tint'],
         'ANISOTROPIC': ['Anisotropic'],
@@ -1652,8 +1698,9 @@ def _force_connect_baked_inputs(material):
 
         bake_node_name = bake_node.name
 
-        if map_type == 'NORMAL':
-            normal_input = principled.inputs.get('Normal')
+        if map_type in {'NORMAL', 'COAT_NORMAL'}:
+            normal_input = _force_get_principled_input_socket(
+                principled, map_type)
             if normal_input is None:
                 continue
 
