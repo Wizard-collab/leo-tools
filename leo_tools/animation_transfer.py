@@ -1,5 +1,6 @@
 import re
 import json
+import mathutils
 import bpy
 from bpy.types import Operator, Panel
 from bpy.props import StringProperty, IntProperty, BoolProperty
@@ -23,6 +24,25 @@ KEYFRAME_POINT_ATTRS = (
 
 # Marker used in the "export all" file to distinguish it from a single-armature export
 ALL_EXPORT_TYPE = "anim_export_all"
+
+
+def _json_safe(obj):
+    """Recursively coerce values into plain JSON-serializable types.
+    Blender mathutils types (Vector, Matrix, Euler, Quaternion...) are turned
+    into nested lists of floats; anything else unsupported becomes a string."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    # mathutils types convert via to_list() (Vector, Matrix, Euler, Quaternion)
+    if hasattr(obj, "to_list") and callable(getattr(obj, "to_list", None)):
+        obj = obj.to_list()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    try:
+        return [_json_safe(v) for v in obj]
+    except TypeError:
+        return str(obj)
 
 
 def get_action_fcurves(action, armature=None):
@@ -210,21 +230,176 @@ def apply_fcurve_styles(action, armature, style_tasks, frame_offset):
         fcurve.update()
 
 
+# CONSTRAINT DEFINITION HELPERS ------------------------------------------------
+# Constraint *animation* (influence, offsets...) is already handled by the generic
+# custom-property channel, because Blender stores bone-constraint F-curves as
+# pose-bone properties with paths like:
+#     pose.bones["Bone"]["constraints[Ctrl].influence"]
+# What this block adds is the constraint *definition* (type/settings/targets) so
+# the constraint object exists with the right settings on import.
+
+def serialize_constraint(constraint):
+    """Serialize a single pose-bone constraint into a JSON-serializable dict,
+    walking its RNA properties generically instead of hard-coding per type.
+    Collection props (e.g. Armature.constraints.targets) are skipped for now."""
+    data = {
+        "name": constraint.name,
+        "type": constraint.type,
+        "mute": bool(constraint.mute),
+        "settings": {},
+    }
+
+    skip = {"name", "type", "active", "show_expanded", "bl_rna", "rna_type"}
+
+    for prop in constraint.bl_rna.properties:
+        ident = prop.identifier
+        if ident in skip or getattr(prop, "is_readonly", False):
+            continue
+        if prop.type == 'COLLECTION':
+            # Collection-backed props aren't represented simply; skip them.
+            continue
+        try:
+            if prop.type == 'POINTER':
+                value = getattr(constraint, ident)
+                data["settings"][ident] = {
+                    "__pointer__": True,
+                    "name": value.name if value else "",
+                }
+            elif isinstance(getattr(constraint, ident), mathutils.Matrix):
+                # Matrix props (e.g. Child-Of inverse_matrix) are stored as a
+                # flat 16-float list so they can be rebuilt exactly on import.
+                mtx = getattr(constraint, ident)
+                data["settings"][ident] = {
+                    "__matrix__": True,
+                    "data": [float(v) for row in mtx for v in row],
+                }
+            elif getattr(prop, "array_length", 0):
+                data["settings"][ident] = _json_safe(getattr(constraint, ident))
+            else:
+                value = getattr(constraint, ident)
+                if isinstance(value, (int, float, bool, str)):
+                    data["settings"][ident] = value
+        except Exception:
+            continue
+
+    return data
+
+
+def serialize_bone_constraints(pose_bone):
+    return [serialize_constraint(c) for c in pose_bone.constraints]
+
+
+def _flatten(value):
+    """Flatten a possibly-nested list of numbers into a single flat list."""
+    flat = []
+    for v in value:
+        if isinstance(v, (list, tuple)):
+            flat.extend(_flatten(v))
+        else:
+            flat.append(v)
+    return flat
+
+
+def _set_constraint_prop(constraint, ident, value, prop):
+    """Apply a single constraint setting, tolerating pointers, matrices and
+    array props. Each assignment is isolated so a bad value never aborts the
+    import. Matrix props (stored via __matrix__) are rebuilt as mathutils
+    Matrix objects and assigned whole, so they round-trip exactly."""
+    try:
+        if isinstance(value, dict) and value.get("__pointer__"):
+            target = bpy.data.objects.get(value.get("name"))
+            if target is not None:
+                try:
+                    setattr(constraint, ident, target)
+                except Exception:
+                    pass
+            return
+
+        if isinstance(value, dict) and value.get("__matrix__"):
+            data16 = [float(v) for v in value.get("data", [])][:16]
+            if len(data16) == 16:
+                mtx = mathutils.Matrix([data16[i * 4:(i + 1) * 4] for i in range(4)])
+                setattr(constraint, ident, mtx)
+            return
+
+        array_len = getattr(prop, "array_length", 0) if prop is not None else 0
+        if array_len and isinstance(value, (list, tuple)):
+            # Matrix-valued props may have been stored as nested 4x4 rows;
+            # rebuild them as a Matrix so element slots aren't clobbered.
+            if (array_len == 16 and value
+                    and all(isinstance(v, (list, tuple)) for v in value)):
+                flat = [float(v) for v in _flatten(value)][:16]
+                if len(flat) == 16:
+                    mtx = mathutils.Matrix([flat[i * 4:(i + 1) * 4] for i in range(4)])
+                    setattr(constraint, ident, mtx)
+                    return
+
+            arr = getattr(constraint, ident)
+            flat = _flatten(value)
+            for i, v in enumerate(flat):
+                if i < len(arr):
+                    arr[i] = v
+            return
+
+        setattr(constraint, ident, value)
+    except Exception:
+        # Unsettable / unsupported property - skip it silently.
+        pass
+
+
+def apply_bone_constraints(pose_bone, stored_constraints):
+    """Recreate/update a pose bone's constraints from stored definitions.
+    Existing constraints are matched by name and updated; missing ones are
+    created with the stored type. Extra constraints are left untouched."""
+    for cdata in stored_constraints:
+        name = cdata.get("name")
+        ctype = cdata.get("type")
+
+        constraint = pose_bone.constraints.get(name)
+        if constraint is None and ctype:
+            constraint = pose_bone.constraints.new(ctype)
+        if constraint is None:
+            continue
+
+        try:
+            if constraint.name != name:
+                constraint.name = name
+        except Exception:
+            pass
+
+        constraint.mute = bool(cdata.get("mute", constraint.mute))
+        prop_map = {p.identifier: p for p in constraint.bl_rna.properties}
+        for ident, value in cdata.get("settings", {}).items():
+            _set_constraint_prop(constraint, ident, value, prop_map.get(ident))
+
+
 # SHARED SERIALIZATION HELPERS -------------------------------------------------
 
-def build_armature_export_data(armature):
+def build_armature_export_data(armature, store_constraints=False):
     """Build the JSON-serializable export dict for a single armature, or None
     if it is not an armature or has no animation data.
+
+    If store_constraints is True, each pose bone's constraint definitions are
+    captured as well (constraint *animation* is always captured via the custom
+    property channel).
+
+    Note: armatures with no animation but with constraints will still be
+    exported when store_constraints is enabled.
 
     Full F-Curve fidelity is preserved (keyframe co, both bezier handles,
     handle types, interpolation, easing, extrapolation) - nothing is
     resampled, and no scene.frame_set/depsgraph evaluation is needed."""
     if not armature or armature.type != 'ARMATURE':
         return None
-    if not armature.animation_data or not armature.animation_data.action:
-        return None
 
-    action = armature.animation_data.action
+    if not armature.animation_data or not armature.animation_data.action:
+        if not store_constraints:
+            return None
+        # No animation to store, but the user asked for constraints - allow
+        # exporting definitions only (bones/animation below will be empty).
+        action = None
+    else:
+        action = armature.animation_data.action
 
     bones = {}
     object_channels = _new_channels()
@@ -264,7 +439,7 @@ def build_armature_export_data(armature):
 
     data = {
         "armature": armature.name,
-        "action": action.name,
+        "action": action.name if action else None,
         "frame_range": [min_frame, max_frame],
         "object_custom_properties": get_custom_properties(armature),
         "bones": {},
@@ -288,6 +463,16 @@ def build_armature_export_data(armature):
             "channels": serialize_channels(channels),
         }
 
+    # Constraint definitions (opt-in). These are stored per pose bone so they
+    # can be reconstructed on import, giving constraint animation a target.
+    if store_constraints:
+        constraints_map = {}
+        for pose_bone in armature.pose.bones:
+            if pose_bone.constraints:
+                constraints_map[pose_bone.name] = serialize_bone_constraints(pose_bone)
+        if constraints_map:
+            data["constraints"] = constraints_map
+
     return data
 
 
@@ -305,6 +490,14 @@ def apply_armature_import_data(armature, data, frame_offset=0, clear_existing=Fa
 
     for prop_name, value in data.get("object_custom_properties", {}).items():
         set_custom_property(armature, prop_name, value)
+
+    # Recreate constraints *before* animation so constraint F-curves have a
+    # target to land on and the right names are in place.
+    for bone_name, stored_constraints in data.get("constraints", {}).items():
+        if bone_name not in armature.pose.bones:
+            print(f"Warning: Bone '{bone_name}' has stored constraints but was not found, skipping")
+            continue
+        apply_bone_constraints(armature.pose.bones[bone_name], stored_constraints)
 
     style_tasks = []
 
@@ -350,47 +543,54 @@ class ANIM_OT_export_rotation_data(Operator, ExportHelper):
     
     filename_ext = ".json"
     filter_glob: StringProperty(default="*.json", options={'HIDDEN'})
-    
+
     def invoke(self, context, event):
         return super().invoke(context, event)
     
     def execute(self, context):
         armature = context.active_object
+        store_constraints = get_scene_store_constraints(context)
         
         if not armature or armature.type != 'ARMATURE':
             self.report({'ERROR'}, "Please select an armature")
             return {'CANCELLED'}
-        
-        if not armature.animation_data or not armature.animation_data.action:
+
+        has_data = bool(armature.animation_data and armature.animation_data.action) or store_constraints
+        if not has_data:
             self.report({'ERROR'}, "Armature has no animation data")
             return {'CANCELLED'}
         
         # Export animation data
         bone_count, object_animated = self.export_armature_animation(
-            armature, 
-            self.filepath
+            armature,
+            self.filepath,
+            store_constraints,
         )
 
-        if bone_count > 0 or object_animated:
+        # Constraint-only exports are still a success.
+        if bone_count > 0 or object_animated or store_constraints:
             parts = []
             if bone_count > 0:
                 parts.append(f"{bone_count} bones")
             if object_animated:
                 parts.append("object transform")
+            if store_constraints:
+                parts.append("constraints")
             self.report({'INFO'}, f"Exported {' and '.join(parts)} to {self.filepath}")
             return {'FINISHED'}
         else:
             self.report({'WARNING'}, "No animated bones found")
             return {'CANCELLED'}
     
-    def export_armature_animation(self, armature, filepath):
-        """Serialize one armature's animation and write it to a JSON file."""
-        data = build_armature_export_data(armature)
+    def export_armature_animation(self, armature, filepath, store_constraints=False):
+        """Serialize one armature's animation (and optionally its constraints)
+        and write it to a JSON file."""
+        data = build_armature_export_data(armature, store_constraints=store_constraints)
         if data is None:
             return 0, False
 
         with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
+            json.dump(_json_safe(data), f, indent=2)
 
         return len(data["bones"]), "object_animation" in data
 
@@ -480,12 +680,13 @@ class ANIM_OT_export_all_animations(Operator, ExportHelper):
             self.report({'ERROR'}, "No armatures found in the scene")
             return {'CANCELLED'}
 
+        store_constraints = get_scene_store_constraints(context)
         export_data = {"type": ALL_EXPORT_TYPE, "armatures": {}}
         skipped = []
         exported_count = 0
 
         for armature in armatures:
-            data = build_armature_export_data(armature)
+            data = build_armature_export_data(armature, store_constraints=store_constraints)
             if data is None:
                 skipped.append(armature.name)
                 continue
@@ -493,15 +694,17 @@ class ANIM_OT_export_all_animations(Operator, ExportHelper):
             exported_count += 1
 
         if exported_count == 0:
-            self.report({'ERROR'}, "No armatures with animation data found in the scene")
+            self.report({'ERROR'}, "No armatures with exportable data found in the scene")
             return {'CANCELLED'}
 
         with open(self.filepath, 'w') as f:
-            json.dump(export_data, f, indent=2)
+            json.dump(_json_safe(export_data), f, indent=2)
 
-        msg = f"Exported animations from {exported_count} armature{'s' if exported_count != 1 else ''} to {self.filepath}"
+        msg = f"Exported {'animations and constraints ' if store_constraints else 'animations '}"
+        msg += f"from {exported_count} armature{'s' if exported_count != 1 else ''} to {self.filepath}"
         if skipped:
-            msg += f" (skipped {len(skipped)} without animation data)"
+            reason = "without animation data" if not store_constraints else "without animation or constraints"
+            msg += f" (skipped {len(skipped)} {reason})"
         self.report({'INFO'}, msg)
         return {'FINISHED'}
 
@@ -598,6 +801,7 @@ class ANIM_PT_transfer_panel(Panel):
         col = box.column(align=True)
         col.operator("anim.export_rotation_data", text="Export Selected Armature", icon='DISK_DRIVE')
         col.operator("anim.export_all_animations", text="Export All Scene Armatures", icon='NONE')
+        box.prop(context.scene, "leo_anim_store_constraints", text="Store Constraints")
         
         layout.separator()
         
@@ -616,6 +820,35 @@ class ANIM_PT_transfer_panel(Panel):
         box.label(text="Armatures missing from the scene are skipped.")
 
 
+# SCENE PROPERTY -----------------------------------------------------------------
+# Boolean toggle shared by both export operators. Kept as a Scene property so the
+# panel can display it without relying on operator button property access.
+SCENE_STORE_CONSTRAINTS_ATTR = "leo_anim_store_constraints"
+
+
+def get_scene_store_constraints(context):
+    """Return whether constraint definitions should be stored on export."""
+    return bool(getattr(context.scene, SCENE_STORE_CONSTRAINTS_ATTR, False))
+
+
+def register_properties():
+    from bpy.types import Scene
+    if hasattr(Scene, SCENE_STORE_CONSTRAINTS_ATTR):
+        return
+    Scene.leo_anim_store_constraints = BoolProperty(
+        name="Store Constraints",
+        description="Also store each bone's constraint definitions on export. "
+                    "Target objects are restored by name on import",
+        default=False,
+    )
+
+
+def unregister_properties():
+    from bpy.types import Scene
+    if hasattr(Scene, SCENE_STORE_CONSTRAINTS_ATTR):
+        del Scene.leo_anim_store_constraints
+
+
 # REGISTRATION
 classes = (
     ANIM_OT_export_rotation_data,
@@ -627,6 +860,7 @@ classes = (
 
 
 def register():
+    register_properties()
     for cls in classes:
         bpy.utils.register_class(cls)
 
@@ -634,6 +868,7 @@ def register():
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+    unregister_properties()
 
 
 if __name__ == "__main__":
