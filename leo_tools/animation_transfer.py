@@ -21,6 +21,9 @@ KEYFRAME_POINT_ATTRS = (
     "back", "amplitude", "period", "type",
 )
 
+# Marker used in the "export all" file to distinguish it from a single-armature export
+ALL_EXPORT_TYPE = "anim_export_all"
+
 
 def get_action_fcurves(action, armature=None):
     """Get fcurves from an action, supporting both legacy actions
@@ -207,7 +210,138 @@ def apply_fcurve_styles(action, armature, style_tasks, frame_offset):
         fcurve.update()
 
 
-# EXPORT OPERATOR
+# SHARED SERIALIZATION HELPERS -------------------------------------------------
+
+def build_armature_export_data(armature):
+    """Build the JSON-serializable export dict for a single armature, or None
+    if it is not an armature or has no animation data.
+
+    Full F-Curve fidelity is preserved (keyframe co, both bezier handles,
+    handle types, interpolation, easing, extrapolation) - nothing is
+    resampled, and no scene.frame_set/depsgraph evaluation is needed."""
+    if not armature or armature.type != 'ARMATURE':
+        return None
+    if not armature.animation_data or not armature.animation_data.action:
+        return None
+
+    action = armature.animation_data.action
+
+    bones = {}
+    object_channels = _new_channels()
+    min_frame = float('inf')
+    max_frame = float('-inf')
+
+    for fcurve in get_action_fcurves(action, armature):
+        scope, bone_name, prop = _classify_fcurve(fcurve.data_path)
+        if scope is None:
+            continue
+
+        for keyframe in fcurve.keyframe_points:
+            frame = keyframe.co[0]
+            if frame < min_frame:
+                min_frame = frame
+            if frame > max_frame:
+                max_frame = frame
+
+        if scope == "object_transform":
+            if 0 <= fcurve.array_index < TRANSFORM_CHANNELS[prop]:
+                object_channels[prop][fcurve.array_index] = fcurve
+        elif scope == "object_custom":
+            object_channels["custom"][prop] = fcurve
+        elif scope == "bone_transform":
+            entry = bones.setdefault(bone_name, _new_channels())
+            if 0 <= fcurve.array_index < TRANSFORM_CHANNELS[prop]:
+                entry[prop][fcurve.array_index] = fcurve
+        elif scope == "bone_custom":
+            entry = bones.setdefault(bone_name, _new_channels())
+            entry["custom"][prop] = fcurve
+
+    # Handle case with no keyframes
+    if min_frame == float('inf'):
+        min_frame, max_frame = 0, 0
+    else:
+        min_frame, max_frame = int(round(min_frame)), int(round(max_frame))
+
+    data = {
+        "armature": armature.name,
+        "action": action.name,
+        "frame_range": [min_frame, max_frame],
+        "object_custom_properties": get_custom_properties(armature),
+        "bones": {},
+    }
+
+    # Armature object's own transform animation
+    if _channels_animated(object_channels):
+        data["object_animation"] = {
+            "rotation_mode": armature.rotation_mode,
+            "channels": serialize_channels(object_channels),
+        }
+
+    for bone_name, channels in bones.items():
+        if bone_name not in armature.pose.bones or not _channels_animated(channels):
+            continue
+
+        pose_bone = armature.pose.bones[bone_name]
+        data["bones"][bone_name] = {
+            "rotation_mode": pose_bone.rotation_mode,
+            "custom_properties": get_custom_properties(pose_bone),
+            "channels": serialize_channels(channels),
+        }
+
+    return data
+
+
+def apply_armature_import_data(armature, data, frame_offset=0, clear_existing=False):
+    """Apply an armature export dict (as built by build_armature_export_data)
+    to the given armature. Returns (imported_bone_count, object_animated)."""
+    # Clear existing animation if requested
+    if clear_existing and armature.animation_data:
+        if armature.animation_data.action:
+            bpy.data.actions.remove(armature.animation_data.action)
+
+    # Ensure armature has animation data
+    if not armature.animation_data:
+        armature.animation_data_create()
+
+    for prop_name, value in data.get("object_custom_properties", {}).items():
+        set_custom_property(armature, prop_name, value)
+
+    style_tasks = []
+
+    object_animated = False
+    object_animation = data.get("object_animation")
+    if object_animation:
+        armature.rotation_mode = object_animation["rotation_mode"]
+        insert_channel_keyframes(armature, object_animation["channels"], "", frame_offset, style_tasks)
+        object_animated = True
+
+    imported_count = 0
+
+    for source_bone, bone_data in data.get("bones", {}).items():
+        if source_bone not in armature.pose.bones:
+            print(f"Warning: Bone '{source_bone}' not found in target armature, skipping")
+            continue
+
+        pose_bone = armature.pose.bones[source_bone]
+        pose_bone.rotation_mode = bone_data["rotation_mode"]
+
+        for prop_name, value in bone_data.get("custom_properties", {}).items():
+            set_custom_property(pose_bone, prop_name, value)
+
+        insert_channel_keyframes(
+            pose_bone, bone_data["channels"], f'pose.bones["{source_bone}"]', frame_offset, style_tasks
+        )
+
+        imported_count += 1
+
+    action = armature.animation_data.action
+    if action is not None:
+        apply_fcurve_styles(action, armature, style_tasks, frame_offset)
+
+    return imported_count, object_animated
+
+
+# EXPORT OPERATOR --------------------------------------------------------------
 class ANIM_OT_export_rotation_data(Operator, ExportHelper):
     """Export rotation animation data from armature"""
     bl_idname = "anim.export_rotation_data"
@@ -250,84 +384,18 @@ class ANIM_OT_export_rotation_data(Operator, ExportHelper):
             return {'CANCELLED'}
     
     def export_armature_animation(self, armature, filepath):
-        """Export all bones with keyframes from an armature, plus the
-        armature object's own transform if it is animated too.
+        """Serialize one armature's animation and write it to a JSON file."""
+        data = build_armature_export_data(armature)
+        if data is None:
+            return 0, False
 
-        Full F-Curve fidelity is preserved (keyframe co, both bezier handles,
-        handle types, interpolation, easing, extrapolation) - nothing is
-        resampled, and no scene.frame_set/depsgraph evaluation is needed."""
-        action = armature.animation_data.action
-
-        bones = {}
-        object_channels = _new_channels()
-        min_frame = float('inf')
-        max_frame = float('-inf')
-
-        for fcurve in get_action_fcurves(action, armature):
-            scope, bone_name, prop = _classify_fcurve(fcurve.data_path)
-            if scope is None:
-                continue
-
-            for keyframe in fcurve.keyframe_points:
-                frame = keyframe.co[0]
-                if frame < min_frame:
-                    min_frame = frame
-                if frame > max_frame:
-                    max_frame = frame
-
-            if scope == "object_transform":
-                if 0 <= fcurve.array_index < TRANSFORM_CHANNELS[prop]:
-                    object_channels[prop][fcurve.array_index] = fcurve
-            elif scope == "object_custom":
-                object_channels["custom"][prop] = fcurve
-            elif scope == "bone_transform":
-                entry = bones.setdefault(bone_name, _new_channels())
-                if 0 <= fcurve.array_index < TRANSFORM_CHANNELS[prop]:
-                    entry[prop][fcurve.array_index] = fcurve
-            elif scope == "bone_custom":
-                entry = bones.setdefault(bone_name, _new_channels())
-                entry["custom"][prop] = fcurve
-
-        # Handle case with no keyframes
-        if min_frame == float('inf'):
-            min_frame, max_frame = 0, 0
-        else:
-            min_frame, max_frame = int(round(min_frame)), int(round(max_frame))
-
-        data = {
-            "armature": armature.name,
-            "action": action.name,
-            "frame_range": [min_frame, max_frame],
-            "object_custom_properties": get_custom_properties(armature),
-            "bones": {}
-        }
-
-        # Armature object's own transform animation
-        if _channels_animated(object_channels):
-            data["object_animation"] = {
-                "rotation_mode": armature.rotation_mode,
-                "channels": serialize_channels(object_channels),
-            }
-
-        for bone_name, channels in bones.items():
-            if bone_name not in armature.pose.bones or not _channels_animated(channels):
-                continue
-
-            pose_bone = armature.pose.bones[bone_name]
-            data["bones"][bone_name] = {
-                "rotation_mode": pose_bone.rotation_mode,
-                "custom_properties": get_custom_properties(pose_bone),
-                "channels": serialize_channels(channels),
-            }
-
-        # Write to file
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2)
 
         return len(data["bones"]), "object_animation" in data
 
 
-# IMPORT OPERATOR
+# IMPORT OPERATOR --------------------------------------------------------------
 class ANIM_OT_import_rotation_data(Operator, ImportHelper):
     """Import rotation animation data to armature"""
     bl_idname = "anim.import_rotation_data"
@@ -377,63 +445,128 @@ class ANIM_OT_import_rotation_data(Operator, ImportHelper):
             return {'CANCELLED'}
     
     def import_armature_animation(self, armature, filepath, frame_offset, clear_existing):
-        """Import animation data to armature, rebuilding original bezier
-        handles/handle types/interpolation/easing/extrapolation exactly."""
+        """Read a single-armature JSON export and apply it to the armature."""
         try:
             with open(filepath, 'r') as f:
                 data = json.load(f)
         except Exception as e:
             self.report({'ERROR'}, f"Failed to read file: {str(e)}")
             return 0, False
-        
-        # Clear existing animation if requested
-        if clear_existing and armature.animation_data:
-            if armature.animation_data.action:
-                bpy.data.actions.remove(armature.animation_data.action)
-        
-        # Ensure armature has animation data
-        if not armature.animation_data:
-            armature.animation_data_create()
 
-        for prop_name, value in data.get("object_custom_properties", {}).items():
-            set_custom_property(armature, prop_name, value)
+        return apply_armature_import_data(armature, data, frame_offset, clear_existing)
 
-        style_tasks = []
 
-        object_animated = False
-        object_animation = data.get("object_animation")
-        if object_animation:
-            armature.rotation_mode = object_animation["rotation_mode"]
-            insert_channel_keyframes(armature, object_animation["channels"], "", frame_offset, style_tasks)
-            object_animated = True
+# EXPORT ALL OPERATOR ----------------------------------------------------------
+class ANIM_OT_export_all_animations(Operator, ExportHelper):
+    """Export animation data from every armature in the scene to one file"""
+    bl_idname = "anim.export_all_animations"
+    bl_label = "Export All Armature Animations"
+    bl_description = "Export all armature animations from the current scene to a single file"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    filename_ext = ".json"
+    filter_glob: StringProperty(default="*.json", options={'HIDDEN'})
+    
+    def invoke(self, context, event):
+        return super().invoke(context, event)
+    
+    @staticmethod
+    def _scene_armatures(context):
+        return (obj for obj in context.scene.objects if obj.type == 'ARMATURE')
+    
+    def execute(self, context):
+        armatures = list(self._scene_armatures(context))
+        if not armatures:
+            self.report({'ERROR'}, "No armatures found in the scene")
+            return {'CANCELLED'}
+
+        export_data = {"type": ALL_EXPORT_TYPE, "armatures": {}}
+        skipped = []
+        exported_count = 0
+
+        for armature in armatures:
+            data = build_armature_export_data(armature)
+            if data is None:
+                skipped.append(armature.name)
+                continue
+            export_data["armatures"][armature.name] = data
+            exported_count += 1
+
+        if exported_count == 0:
+            self.report({'ERROR'}, "No armatures with animation data found in the scene")
+            return {'CANCELLED'}
+
+        with open(self.filepath, 'w') as f:
+            json.dump(export_data, f, indent=2)
+
+        msg = f"Exported animations from {exported_count} armature{'s' if exported_count != 1 else ''} to {self.filepath}"
+        if skipped:
+            msg += f" (skipped {len(skipped)} without animation data)"
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+# IMPORT ALL OPERATOR ----------------------------------------------------------
+class ANIM_OT_import_all_animations(Operator, ImportHelper):
+    """Import animation data for all armatures from a single file"""
+    bl_idname = "anim.import_all_animations"
+    bl_label = "Import All Armature Animations"
+    bl_description = "Import all armature animations from a single file, matching armatures by name"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    filename_ext = ".json"
+    filter_glob: StringProperty(default="*.json", options={'HIDDEN'})
+    
+    frame_offset: IntProperty(
+        name="Frame Offset",
+        description="Offset imported frames by this amount",
+        default=0
+    )
+    
+    clear_existing: BoolProperty(
+        name="Clear Existing Animation",
+        description="Clear existing animation before importing",
+        default=False
+    )
+    
+    def execute(self, context):
+        try:
+            with open(self.filepath, 'r') as f:
+                data = json.load(f)
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to read file: {str(e)}")
+            return {'CANCELLED'}
+
+        if data.get("type") != ALL_EXPORT_TYPE:
+            self.report({'ERROR'},
+                        "Not an 'Export All' file. Use 'Import from File' with a single-armature export.")
+            return {'CANCELLED'}
+
+        scene_armatures = {obj.name: obj for obj in context.scene.objects if obj.type == 'ARMATURE'}
 
         imported_count = 0
+        missing = []
 
-        for source_bone, bone_data in data["bones"].items():
-            if source_bone not in armature.pose.bones:
-                print(f"Warning: Bone '{source_bone}' not found in target armature, skipping")
+        for name, armature_data in data.get("armatures", {}).items():
+            armature = scene_armatures.get(name)
+            if armature is None:
+                missing.append(name)
                 continue
-            
-            pose_bone = armature.pose.bones[source_bone]
-            pose_bone.rotation_mode = bone_data["rotation_mode"]
-
-            for prop_name, value in bone_data.get("custom_properties", {}).items():
-                set_custom_property(pose_bone, prop_name, value)
-
-            insert_channel_keyframes(
-                pose_bone, bone_data["channels"], f'pose.bones["{source_bone}"]', frame_offset, style_tasks
-            )
-
+            apply_armature_import_data(armature, armature_data, self.frame_offset, self.clear_existing)
             imported_count += 1
 
-        action = armature.animation_data.action
-        if action is not None:
-            apply_fcurve_styles(action, armature, style_tasks, frame_offset)
+        if imported_count == 0:
+            self.report({'WARNING'}, "No matching armatures were found/imported")
+            return {'CANCELLED'}
 
-        return imported_count, object_animated
+        msg = f"Imported animations for {imported_count} matching armature{'s' if imported_count != 1 else ''}"
+        if missing:
+            msg += f" (no matching armature for: {', '.join(missing)})"
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
 
 
-# UI PANEL
+# UI PANEL ---------------------------------------------------------------------
 class ANIM_PT_transfer_panel(Panel):
     """Panel for animation transfer tools"""
     bl_label = "Animation Transfer"
@@ -463,7 +596,8 @@ class ANIM_PT_transfer_panel(Panel):
         box = layout.box()
         box.label(text="Export Animation", icon='EXPORT')
         col = box.column(align=True)
-        col.operator("anim.export_rotation_data", text="Export to File", icon='DISK_DRIVE')
+        col.operator("anim.export_rotation_data", text="Export Selected Armature", icon='DISK_DRIVE')
+        col.operator("anim.export_all_animations", text="Export All Scene Armatures", icon='NONE')
         
         layout.separator()
         
@@ -471,13 +605,23 @@ class ANIM_PT_transfer_panel(Panel):
         box = layout.box()
         box.label(text="Import Animation", icon='IMPORT')
         col = box.column(align=True)
-        col.operator("anim.import_rotation_data", text="Import from File", icon='FILE_FOLDER')
+        col.operator("anim.import_rotation_data", text="Import to Selected Armature", icon='FILE_FOLDER')
+        col.operator("anim.import_all_animations", text="Import All Scene Armatures", icon='NONE')
+        
+        layout.separator()
+        
+        # Hint for import-all matching
+        box = layout.box()
+        box.label(text="Import All matches armatures by name.", icon='INFO')
+        box.label(text="Armatures missing from the scene are skipped.")
 
 
 # REGISTRATION
 classes = (
     ANIM_OT_export_rotation_data,
     ANIM_OT_import_rotation_data,
+    ANIM_OT_export_all_animations,
+    ANIM_OT_import_all_animations,
     ANIM_PT_transfer_panel,
 )
 
